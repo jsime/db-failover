@@ -324,7 +324,7 @@ sub verify_config {
         if ( $c->{ $machine }->{ 'type' } eq 'ifupdown' ) {
             $self->show_help_and_die( 'Section ip-takeover is missing param %s-interface', $machine ) unless defined $c->{ $machine }->{ 'interface' };
         }
-        else {
+        elsif ( $c->{ $machine }->{ 'type' } ne 'none' ) {
             $self->show_help_and_die( 'Bad %s-type in section ip-takeover.', $machine );
         }
     }
