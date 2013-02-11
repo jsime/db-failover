@@ -205,6 +205,8 @@ sub ssh {
 
     my $ssh_account = defined $user ? $user . '@' . $host : $host;
 
+    $command = 'sudo ' . $command if (!defined $user || $user ne 'root') && $command !~ /^\s*sudo/o;
+
     my $result = $self->run_command( 'ssh', $ssh_account, $command );
     $result->{ 'error_code' } = 'STDERR is not empty' if ( !$result->{ 'error_code' } ) && $result->{ 'stderr' };
 
