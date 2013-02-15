@@ -5,667 +5,784 @@ Failover->new()->run();
 exit;
 
 package Failover;
+
+use Data::Dumper;
+use File::Basename;
+use Getopt::Long;
+
 use strict;
 use warnings;
-use Carp;
-use English qw( -no_match_vars );
-use Data::Dumper;
-use Net::Ping;
-use Time::HiRes;
-use File::Temp;
-use FindBin;
-use Term::ANSIColor;
-use File::Temp qw( tempfile );
 
 sub new {
     my $class = shift;
-    return bless {}, $class;
+    my $self = bless {}, $class;
+
+    ($self->{'name'}, $self->{'base_dir'}) = fileparse(__FILE__);
+
+    $self->{'options'} = {};
+    GetOptions($self->{'options'},
+        # general options
+        'config|c=s',
+        'no-demotion!',
+        'dry-run|d!',
+        'skip-confirmation!',
+        'exit-on-error|e!',
+        'test|t!',
+        'verbose|v+',
+        'help|h!',
+        # primary actions
+        'promote=s',
+        'demote=s@',
+    );
+
+    if (exists $self->{'options'}{'help'} && $self->{'options'}{'help'}) {
+        print $self->usage;
+        exit(0);
+    }
+
+    $self->{'config'} = exists $self->{'options'}{'config'}
+        ? Failover::Config->new($self->{'base_dir'}, $self->{'options'}{'config'})
+        : Failover::Config->new($self->{'base_dir'});
+
+    return $self;
+}
+
+sub usage {
+    my ($self) = @_;
+
+    return <<EOU;
+$self->{'name'} - Failover Management for OmniPITR-enabled PostgreSQL
+
+Basic options, common to multiple actions.
+
+  --config -c <file>    Alternate configuration file to use. Defaults
+                        to failover.ini in the same directory as this
+                        program.
+
+  --dry-run -d          Goes through all the motions, but only echoes
+                        commands instead of running them.
+
+  --exit-on-error -e    Immediately abort program execution on error
+                        conditions normally requiring confirmation to
+                        continue, instead of prompting.
+
+  --no-demotion         Prevents the current master database from
+                        being demoted to a slave when a new master is
+                        promoted.
+
+  --skip-confirmation   Do not wait for confirmation after displaying
+                        configuration summary. Proceed directly to
+                        specified action.
+
+  --verbose -v          May be specified multiple times.
+
+  --help -h             Display this message and exit.
+
+Actions, more than one of which may be performed in a single run. They
+will be run in the order shown here when multiple are specified.
+
+  --promote <host>      Makes <host> the new master database, and
+                        demotes any other host currently a master.
+                        This can only be specified once, as it involves
+                        the specified host taking over the shared IP.
+
+  --demote <host>       Singles out <host> for demotion, in the
+                        event a --promote was run with --no-demotion
+                        previously (leaving you with a false master).
+                        May be specified multiple times.
+
+Special Actions, which if specified will cause other actions to be
+ignored.
+
+  --test -t             Tests connectivity/logins to all systems in
+                        the given configuration, and verify current
+                        OmniPITR status. Implies --skip-confirmation
+                        since it makes no modifications to any
+                        systems.
+
+EOU
 }
 
 sub run {
-    my $self = shift;
-    $OUTPUT_AUTOFLUSH = 1;
-    $self->get_config();
-    $self->verify_config();
-    $self->get_user_confirmation();
-    exit unless $self->switch_ip();
-    exit unless $self->promote_slave();
-    exit unless $self->data_checks();
-    print "\nAll done.\n";
-    exit;
+    my ($self) = @_;
+
+    if ($self->test) {
+        # if run with --test action, run through all the tests and exit before anything else can be done
+        exit $self->test_setup;
+    }
+
+    $self->show_config;
+    Failover::Utils::get_confirmation('Proceed with this configuration?') if !$self->skip_confirmation;
+
+    # Run configuration/host tests to verify current operational status before performing any actions
+    $self->test_setup;
+
 }
 
-sub data_checks {
-    my $self = shift;
-    print "Data checks:\n";
+sub show_config {
+    my ($self) = @_;
 
-    my $all_ok = 1;
-    my @data_checks = sort grep { /^data-check-/ } keys %{ $self->{ 'cfg' } };
-    for my $data_check ( @data_checks ) {
-        my $C = $self->{ 'cfg' }->{ $data_check };
-        $C->{ 'result' } = '' if $ENV{ 'DRY_RUN' };
-        my $title = $C->{ 'title' } || $data_check;
-        $self->status( "  - $title" );
-        my $result = $self->psql( $C->{ 'query' } );
-        $result->{ 'stdout' } =~ s/\s*\z//;
-        if ( $result->{ 'error_code' } ) {
-            $all_ok = 0;
-            $self->status_change( 'ERROR: %s : %s', $result->{ 'error_code' }, $result->{ 'stderr' }, );
-        }
-        elsif ( $result->{ 'stdout' } ne $C->{ 'result' } ) {
-            $all_ok = 0;
-            $self->status_change( 'ERROR: Unexpected return: [%s], expected [%s]', $result->{ 'stdout' }, $C->{ 'result' } );
-        }
-        else {
-            $self->status_change( 'OK' );
-        }
-    }
-    return $all_ok;
+    $self->config->display;
 }
 
-sub promote_slave {
-    my $self = shift;
+sub test_setup {
+    my ($self) = @_;
 
-    # shortcut
-    my $C = $self->{ 'cfg' }->{ 'db-promotion' };
+    # Test SSH connectivity to all database hosts
+    foreach my $host (Failover::Utils::sort_section_names($self->config->get_hosts)) {
+        my $cmd = Failover::Command->new('/bin/true')->name(sprintf('Connectivity Test - %s', $host))
+            ->verbose($self->verbose)
+            ->host($self->config->section($host)->{'host'})
+            ->user($self->config->section($host)->{'user'})
+            ->ssh->run($self->dry_run);
 
-    $self->status( 'Creating promotion trigger file' );
-
-    my $touch_cmd = sprintf 'touch %s', quotemeta( $C->{ 'trigger-file' } );
-    my $result = $self->ssh( $C->{ 'user' }, $C->{ 'host' }, $touch_cmd, 'ERROR' );
-    return if $result->{ 'error_code' };
-
-    $self->status( 'Checking that new pg is up and running in R/W mode' );
-    my $start_time = time();
-    my $end_at     = time() + ( $self->{ 'cfg' }->{ 'db-check' }->{ 'timeout' } || 60 );
-    my $is_ok      = undef;
-    while ( 1 ) {
-        $result = $self->psql( 'CREATE TEMP TABLE failover_check ( i int4 )' );
-        $is_ok = 1 if !$result->{ 'error_code' };
-        last if $is_ok;
-        last if time() > $end_at;
-        sleep 1;
+        next if $cmd->status == 0;
+        exit(1) if $self->exit_on_error;
+        Failover::Utils::get_confirmation('Host failed connectivity check. Proceed anyway?')
+            unless $self->skip_confirmation;
     }
-    if ( $is_ok ) {
-        $self->status_change( 'OK' );
-        return 1;
+
+    # Test SSH connectivity to all backup hosts
+    foreach my $host (Failover::Utils::sort_section_names($self->config->get_backups)) {
+        my $cmd = Failover::Command->new('/bin/true')->name(sprintf('Connectivity Test - %s', $host))
+            ->verbose($self->verbose)
+            ->host($self->config->section($host)->{'host'})
+            ->user($self->config->section($host)->{'user'})
+            ->ssh->run($self->dry_run);
+
+        next if $cmd->status == 0;
+        exit(1) if $self->exit_on_error;
+        Failover::Utils::get_confirmation('Host failed connectivity check. Proceed anyway?')
+            unless $self->skip_confirmation;
     }
-    $self->status_change( 'ERROR: PostgreSQL cannot be used on slave. Reason: %s', $result->{ 'stderr' } );
+}
+
+sub config {
+    my ($self) = @_;
+    return $self->{'config'} if exists $self->{'config'};
     return;
 }
 
-sub ping {
-    my $self = shift;
-    my ( $host, $port, $timeout ) = @_;
+sub dry_run {
+    my ($self) = @_;
 
-    if ( $ENV{ 'DRY_RUN' } ) {
-        print "\n\nPinging $host, using tcp SYN to port $port, with timeout $timeout s.\n";
-        return 1;
-    }
-    my $p = Net::Ping->new( 'tcp', $timeout );
-    $p->port_number( $port );
-    my $ping_status = $p->ping( $host );
-    $p->close();
-
-    return $ping_status;
+    return $self->{'options'}{'dry-run'} if exists $self->{'options'}{'dry-run'};
+    return 0;
 }
 
-sub switch_ip {
-    my $self = shift;
+sub exit_on_error {
+    my ($self) = @_;
 
-    # shortcut
-    my $C = $self->{ 'cfg' }->{ 'ip-takeover' };
+    return $self->{'options'}{'exit-on-error'} if exists $self->{'options'}{'exit-on-error'};
+    return 0;
+}
 
-    $self->status( 'Checking db ip (%s)', $C->{ 'ip' } );
+sub skip_confirmation {
+    my ($self) = @_;
 
-    my $ping_ok = $self->ping( $C->{ 'ip' }, $self->{ 'cfg' }->{ 'db-check' }->{ 'port' }, $C->{ 'initial-ping-timeout' } || 3 );
+    return $self->{'options'}{'skip-confirmation'} if exists $self->{'options'}{'skip-confirmation'};
+    return 0;
+}
 
-    if ( $ping_ok ) {
-        $self->status_change( 'OK' );
-    }
-    else {
-        $self->status_change( 'WARN: Remote host unreachable for ping' );
-    }
+sub test {
+    my ($self) = @_;
 
-    $self->status( 'Disabling IP (%s) on old host (%s)', $C->{ 'ip' }, $C->{ 'old' }->{ 'host' } );
+    return $self->{'options'}{'test'} if exists $self->{'options'}{'test'};
+    return 0;
+}
 
-    my $result = {};
-    if ( $C->{ 'old' }->{ 'type' } ne 'none' ) {
-        $result = $self->ssh(
-            $C->{ 'old' }->{ 'user' },
-            $C->{ 'old' }->{ 'host' },
-            $self->network_interface_change( 'down', $C->{ 'old' } ),
-            $ping_ok ? 'ERROR' : 'WARN',
-        );
-        if ( $result->{ 'error_code' } ) {
-            if ( $ping_ok ) {
-                printf 'Cannot disable network interface on old host (%s). And the IP is pingable. Cannot continue.%s', $C->{ 'old' }->{ 'host' }, "\n";
-                return;
-            }
-            printf 'Cannot disable network interface on old host (%s), but cannot ping the takeover IP either. Continuing, but make sure old host does not bring the interface up.%s',
-                $C->{ 'old' }->{ 'host' }, "\n";
-        }
-    }
-    else {
-        $self->status_change( 'OK : skipped' );
-    }
+sub verbose {
+    my ($self) = @_;
 
-    $self->status( 'Enabling IP (%s) on new host (%s)', $C->{ 'ip' }, $C->{ 'new' }->{ 'host' } );
+    return $self->{'options'}{'verbose'} if exists $self->{'options'}{'verbose'};
+    return 0;
+}
 
-    $result = {};
-    if ( $C->{ 'new' }->{ 'type' } ne 'none' ) {
-        $result = $self->ssh(
-            $C->{ 'new' }->{ 'user' },
-            $C->{ 'new' }->{ 'host' },
-            $self->network_interface_change( 'up', $C->{ 'new' } ),
-            'ERROR',
-        );
 
-        if ( $result->{ 'error_code' } ) {
-            printf 'Cannot bring up takeover IP interface on new host (%s).%s', $C->{ 'new' }->{ 'host' }, "\n";
-            return;
-        }
-    }
-    else {
-        $self->status_change( 'OK : skipped' );
-    }
+package Failover::Command;
 
-    $self->status( 'Checking db ip (%s) after takeover', $C->{ 'ip' } );
-    $ping_ok = $self->ping( $C->{ 'ip' }, $self->{ 'cfg' }->{ 'db-check' }->{ 'port' }, $C->{ 'final-ping-timeout' } || 60 );
-    if ( $ping_ok ) {
-        $self->status_change( 'OK' );
-        return 1;
-    }
-    $self->status_change( 'ERROR: Remote host unreachable for ping' );
-    return;
+use strict;
+use warnings;
+
+use File::Temp qw( tempfile );
+use Term::ANSIColor;
+
+sub new {
+    my ($class, @command) = @_;
+
+    my $self = bless {}, $class;
+    $self->{'verbose'} = 0;
+    $self->{'silent'} = 0;
+    $self->{'command'} = [@command] if @command;
+    Failover::Utils::die_error('Empty command list provided.') if !exists $self->{'command'};
+
+    return $self;
+}
+
+sub name {
+    my ($self, $name) = @_;
+
+    $self->{'name'} = defined $name ? $name : '';
+    Failover::Utils::log('Command object name set to %s.', $self->{'name'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub host {
+    my ($self, $hostname) = @_;
+
+    $self->{'host'} = defined $hostname ? $hostname : '';
+    Failover::Utils::log('Command object host set to %s.', $self->{'host'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub port {
+    my ($self, $port) = @_;
+
+    $self->{'port'} = defined $port ? $port : '';
+    Failover::Utils::log('Command object port set to %s.', $self->{'port'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub user {
+    my ($self, $username) = @_;
+
+    $self->{'user'} = defined $username ? $username : '';
+    Failover::Utils::log('Command object user set to %s.', $self->{'user'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub database {
+    my ($self, $database) = @_;
+
+    $self->{'database'} = defined $database ? $database : '';
+    Failover::Utils::log('Command object database set to %s.', $self->{'database'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub silent {
+    my ($self, $silent) = @_;
+
+    $self->{'silent'} = defined $silent && $silent ? 1 : 0;
+    Failover::Utils::log('Command object silence set to %s.', $self->{'silence'} ? 'on' : 'off')
+        if $self->{'verbose'};
+
+    return $self;
+}
+
+sub verbose {
+    my ($self, $verbosity) = @_;
+
+    $self->{'verbose'} = defined $verbosity && $verbosity =~ /^\d+$/o ? $verbosity : 0;
+    Failover::Utils::log('Command object verbosity set to %s.', $self->{'verbose'}) if $self->{'verbose'};
+
+    return $self;
 }
 
 sub psql {
-    my $self = shift;
-    my ( $query ) = @_;
+    my ($self) = @_;
 
-    # Shortcut
-    my $C = $self->{ 'cfg' }->{ 'db-check' };
+    Failover::Utils::log('Marking command object as PSQL command.') if $self->{'verbose'};
 
-    my @command = ();
-    push @command, 'psql';
-    push @command, '-qAtX';
-    push @command, '-h', $self->{ 'cfg' }->{ 'ip-takeover' }->{ 'ip' };
-    push @command, '-p', $C->{ 'port' } if $C->{ 'port' };
-    push @command, '-U', $C->{ 'user' } if $C->{ 'user' };
-    push @command, '-d', $C->{ 'database' } if $C->{ 'database' };
-    push @command, '-c', $query;
+    my @psql_cmd = qw( psql -qAtX );
 
-    return $self->run_command( @command );
+    push(@psql_cmd, '-h', $self->{'host'})     if exists $self->{'host'} && $self->{'host'} =~ m{\w+}o;
+    push(@psql_cmd, '-p', $self->{'port'})     if exists $self->{'port'} && $self->{'port'} =~ m{^\d+$}o;
+    push(@psql_cmd, '-U', $self->{'user'})     if exists $self->{'user'} && $self->{'user'} =~ m{\w+}o;
+    push(@psql_cmd, '-d', $self->{'database'}) if exists $self->{'database'} && $self->{'database'} =~ m{\w+}o;
+
+    push(@psql_cmd, '-c', '"' . quotemeta(join(' ', @{$self->{'command'}})) . '"');
+
+    $self->{'command'} = \@psql_cmd;
+
+    return $self;
 }
 
 sub ssh {
-    my $self = shift;
-    my ( $user, $host, $command, $status_prefix ) = @_;
+    my ($self) = @_;
 
-    my $ssh_account = defined $user ? $user . '@' . $host : $host;
+    Failover::Utils::log('Marking command object as SSH remote command.') if $self->{'verbose'};
+    Failover::Utils::die_error('Attempt to issue an SSH command without a hostname.')
+        unless exists $self->{'host'} && $self->{'host'} =~ m{\w+}o;
 
-    $command = 'sudo ' . $command if (!defined $user || $user ne 'root') && $command !~ /^\s*sudo/o;
+    my @ssh_cmd = qw( ssh -q -oBatchMode=yes );
 
-    my $result = $self->run_command( 'ssh', $ssh_account, $command );
-    $result->{ 'error_code' } = 'STDERR is not empty' if ( !$result->{ 'error_code' } ) && $result->{ 'stderr' };
+    push(@ssh_cmd, '-p', $self->{'port'}) if exists $self->{'port'} && $self->{'port'} =~ m{^\d+$}o;
+    push(@ssh_cmd, exists $self->{'user'} && $self->{'user'} =~ m{\w+}o
+        ? $self->{'user'} . '@' . $self->{'host'}
+        : $self->{'host'}
+    );
+    push(@ssh_cmd, map { quotemeta } @{$self->{'command'}}) if exists $self->{'command'} && @{$self->{'command'}};
 
-    if ( $result->{ 'error_code' } ) {
-        $self->status_change( '%s: %s', $status_prefix, $result->{ 'error_code' } );
-        printf 'Real command: %s%s', $result->{ 'real_command' }, "\n";
-    }
-    else {
-        $self->status_change( 'OK' );
-    }
+    $self->{'command'} = \@ssh_cmd;
 
-    printf "STDOUT:\n%s\n\n", $result->{ 'stdout' } if $result->{ 'stdout' };
-    printf "STDERR:\n%s\n\n", $result->{ 'stderr' } if $result->{ 'stderr' };
-
-    return $result;
+    return $self;
 }
 
-sub network_interface_change {
-    my $self = shift;
-    my ( $direction, $config ) = @_;
+sub run {
+    my ($self, $dryrun) = @_;
 
-    # So far we have only one possible "type" - ifupdown, but in future
-    # there will be more, and then we'll need some logic in here to build
-    # proper command.
+    Failover::Utils::log('Received run request for command object: %s', join(' ', @{$self->{'command'}}))
+        if $self->{'verbose'};
+    $self->print_running($self->{'name'} || join(' ', @{$self->{'command'}}));
 
-    return sprintf 'if%s %s', $direction, quotemeta( $config->{ 'interface' } );
+    if ($dryrun) {
+        $self->{'status'} = 0;
+        $self->{'stdout'} = '';
+        $self->{'stderr'} = '';
+        return $self->{'silent'} ? 1 : $self->print_ok();;
+    }
+
+    my ($stdout_fh, $stdout_filename) = tempfile("failover.$$.stdout.XXXXXX");
+    my ($stderr_fh, $stderr_filename) = tempfile("failover.$$.stderr.XXXXXX");
+
+    my $command = sprintf('%s 2>%s >%s',
+        join(' ', @{$self->{'command'}}),
+        quotemeta $stderr_filename,
+        quotemeta $stdout_filename);
+
+    local $/ = undef;
+    $self->{'status'} = system $command;
+    $self->{'child_error'} = $? || 0;
+    $self->{'os_error'} = $! || 0;
+
+    $self->{'stdout'} = <$stdout_fh>;
+    $self->{'stderr'} = <$stderr_fh>;
+
+    if ($self->{'verbose'} >= 2 && length($self->{'stdout'}) > 0) {
+        Failover::Utils::log('Command Object STDOUT: %s', $_) for split(/\n/, $self->{'stdout'});
+    }
+
+    if ($self->{'verbose'} && $self->{'status'} != 0) {
+        Failover::Utils::log('Command Object STDERR: %s', $_) for split(/\n/, $self->{'stderr'});
+    }
+
+    if ($self->{'status'} == 0) {
+        $self->print_ok() unless $self->{'silent'};
+    } else {
+        if ($self->{'child_error'} == -1) {
+            $self->print_fail('Failed to execute: %s', $self->{'os_error'});
+        } elsif ($self->{'child_error'} & 127) {
+            $self->print_fail('Child died with signal %s, %s coredump.',
+                ($self->{'child_error'} & 127),
+                ($self->{'child_error'} & 128) ? 'with' : 'without');
+        } else {
+            $self->print_fail('Child exited with value %s', $self->{'child_error'} >> 8);
+        }
+    }
+
+    close($stdout_fh);
+    close($stderr_fh);
+
+    unlink($stdout_filename, $stderr_filename);
+
+    return $self;
 }
 
 sub status {
-    my $self = shift;
-    my ( $msg, @args ) = @_;
-    my $status_msg = sprintf( $msg, @args );
-    printf '%-70s : ', $status_msg;
-    $self->{ 'status_start_time' } = Time::HiRes::time();
+    my ($self) = @_;
+    return $self->{'status'} if exists $self->{'status'};
     return;
 }
 
-sub status_change {
-    my $self = shift;
-    my ( $msg, @args ) = @_;
-    my $now = Time::HiRes::time();
-    my $status_msg = sprintf( $msg, @args );
-    my $color =
-          $status_msg =~ /^OK/    ? 'bold green'
-        : $status_msg =~ /^WARN/  ? 'magenta'
-        : $status_msg =~ /^ERROR/ ? 'bold red'
-        :                           'reset';
-    printf "%s%s%s (%.3fs)\n", color( $color ), $status_msg, color( 'reset' ), $now - $self->{ 'status_start_time' };
+sub stderr {
+    my ($self) = @_;
+    return $self->{'stderr'} if exists $self->{'stderr'};
     return;
 }
 
-sub get_user_confirmation {
-    my $self = shift;
-
-    print " Settings:\n";
-    print "===========\n\n";
-
-    for my $section ( qw( ip-takeover db-promotion db-check ) ) {
-        $self->show_configuration_section( $section, $self->{ 'cfg' }->{ $section }, 0 );
-    }
-
-    my @data_checks = sort grep { /^data-check-/ } keys %{ $self->{ 'cfg' } };
-    if ( 0 != scalar @data_checks ) {
-        print " Data checks:\n";
-        print "==============\n";
-        my $max_len = 0;
-        for ( @data_checks ) {
-            $max_len = length( $_ ) if length( $_ ) > $max_len;
-        }
-        $max_len -= 11;
-        for my $check ( @data_checks ) {
-            printf " %${max_len}s : %s\n", substr( $check, 11 ), $self->{ 'cfg' }->{ $check }->{ 'query' };
-        }
-        print "\n";
-    }
-    return if defined( $ENV{ 'FAILOVER' } ) && ( $ENV{ 'FAILOVER' } eq 'confirmed' );
-    print 'Do you want to proceed (yes/no): ';
-    my $answer = <STDIN>;
-    return if $answer =~ m{\Ayes\r?\n};
-    exit 1;
-}
-
-sub show_configuration_section {
-    my $self = shift;
-    my ( $title, $hash, $indent ) = @_;
-    printf "%s- %s\n", " " x ( 2 * $indent ), $title;
-
-    my @keys = sort keys %{ $hash };
-
-    for my $key ( @keys ) {
-        if ( 'HASH' eq ref $hash->{ $key } ) {
-            $self->show_configuration_section( $key, $hash->{ $key }, $indent + 1 );
-        }
-        else {
-            my $label_length = 15 - 2 * $indent;
-            printf "%s  - %-${label_length}s : %s\n", " " x ( 2 * $indent ), $key, $hash->{ $key };
-        }
-    }
-    print "\n" unless $indent;
+sub stdout {
+    my ($self) = @_;
+    return $self->{'stdout'} if exists $self->{'stdout'};
     return;
 }
 
-sub verify_config {
-    my $self = shift;
+sub print_fail {
+    my ($self, $fmt, @args) = @_;
 
-    for my $section ( qw( ip-takeover db-promotion db-check ) ) {
-        next if defined $self->{ 'cfg' }->{ $section };
-        $self->show_help_and_die( 'Section %s is missing from config file', $section );
-    }
-
-    my $c = $self->{ 'cfg' }->{ 'ip-takeover' };
-    for my $machine ( qw( old new ) ) {
-        for my $key ( qw( host type ) ) {
-            next if defined $c->{ $machine }->{ $key };
-            $self->show_help_and_die( 'Section ip-takeover is missing param %s-%s', $machine, $key );
-        }
-        if ( $c->{ $machine }->{ 'type' } eq 'ifupdown' ) {
-            $self->show_help_and_die( 'Section ip-takeover is missing param %s-interface', $machine ) unless defined $c->{ $machine }->{ 'interface' };
-        }
-        elsif ( $c->{ $machine }->{ 'type' } ne 'none' ) {
-            $self->show_help_and_die( 'Bad %s-type in section ip-takeover.', $machine );
-        }
-    }
-    $self->show_help_and_die( 'Section ip-takeover is missing param ip' ) unless defined $c->{ 'ip' };
-
-    $c = $self->{ 'cfg' }->{ 'db-promotion' };
-    for my $key ( qw( host trigger-file ) ) {
-        next if defined $c->{ $key };
-        $self->show_help_and_die( 'Section db-promotion is missing param %s', $key );
-    }
-
-    $c = $self->{ 'cfg' }->{ 'db-check' };
-    for my $key ( qw( database port user ) ) {
-        next if defined $c->{ $key };
-        $self->show_help_and_die( 'Section db-check is missing param %s', $key );
-    }
-
-    for my $section ( grep { /^data-check-/ } keys %{ $self->{ 'cfg' } } ) {
-        my $c = $self->{ 'cfg' }->{ $section };
-        for my $key ( qw( query result ) ) {
-            next if defined $c->{ $key };
-            $self->show_help_and_die( 'Section %s is missing param %s', $section, $key );
-        }
-    }
-
-    return;
+    printf("  [%sFAIL%s]\n", color('bold red'), color('reset')) unless $self->{'silent'};
+    printf("$fmt\n", map { color('yellow') . $_ . color('reset') } @args) if defined $fmt && $self->{'verbose'};
+    return 0;
 }
 
-sub get_config {
-    my $self        = shift;
-    my $config_file = $ARGV[ 0 ];
-    $self->show_help_and_die() unless defined $config_file;
+sub print_ok {
+    my ($self) = @_;
+    printf("  [%sOK%s]\n", color('bold green'), color('reset')) unless $self->{'silent'};
+    return 1;
+}
 
-    open my $fh, '<', $config_file or $self->show_help_and_die( 'Cannot open given file (%s): %s', $config_file, $OS_ERROR );
+sub print_running {
+    my ($self, $name) = @_;
 
-    my $current_section = undef;
-    while ( my $l = <$fh> ) {
-        next if $l =~ /\A\s*[#;]/;
-        next if $l =~ /\A\s*\z/;
+    my $width = Failover::Utils::term_width() || 80;
+    $width = 120 if $width > 120;
+    $width -= 16;
 
-        $l =~ s/\s*\z//;
+    printf("  Running: %s%-${width}s%s",
+        color('yellow'),
+        (length($name) > $width ? substr($name, 0, ($width - 3)) . '...' : $name),
+        color('reset')) unless $self->{'silent'};
+}
 
-        if ( $l =~ m{\A\[(.*)\]\z} ) {
-            $current_section = $1;
+
+package Failover::Config;
+
+use Term::ANSIColor;
+
+use strict;
+use warnings;
+
+sub new {
+    my ($class, $base_dir, $file_path) = @_;
+    my $self = bless {}, $class;
+
+    if (defined $file_path) {
+        Failover::Utils::die_error('Configuration file given as %s does not exist.', $file_path) unless -f $file_path;
+        Failover::Utils::die_error('Configuration file at %s is not readable.', $file_path) unless -r _;
+        $self->{'config'} = read_config($file_path)
+            or Failover::Utils::die_error('Configuration file at %s is not valid.', $file_path);
+    } elsif (defined $base_dir && -d $base_dir && -f "$base_dir/failover.ini" && -r _) {
+        $self->{'config'} = read_config("$base_dir/failover.ini")
+            or Failover::Utils::die_error('Invalid configuration located at %s.', "$base_dir/failover.ini");
+    } else {
+        Failover::Utils::die_error('No usable configuration specified or located.');
+    }
+
+    $self->validate() or Failover::Utils::die_error('Configuration failed validation.');
+
+    return $self;
+}
+
+sub display {
+    my ($self) = @_;
+
+    my $cols = Failover::Utils::term_width();
+
+    $self->display_multisection_block($cols, 'Shared IP',
+        Failover::Utils::sort_section_names(grep { $_ =~ m{^shared-ip}o } keys %{$self->{'config'}}));
+    $self->display_multisection_block($cols, 'Backup',
+        Failover::Utils::sort_section_names(grep { $_ =~ m{^backup}o } keys %{$self->{'config'}}));
+    $self->display_multisection_block($cols, 'Host',
+        Failover::Utils::sort_section_names(grep { $_ =~ m{^host-}o } keys %{$self->{'config'}}));
+    $self->display_multisection_block($cols, 'Data Check',
+        Failover::Utils::sort_section_names(grep { $_ =~ m{^data-check}o } keys %{$self->{'config'}}));
+}
+
+sub display_multisection_block {
+    my ($self, $cols, $label, @sections) = @_;
+
+    # longest lengths of various things that get displayed, so we can line it all up, with min widths
+    my ($lname, $lkey, $lval) = (8,4,8);
+
+    $lname = (sort { $b <=> $a } map { length($_) } @sections)[0];
+    foreach my $section (@sections) {
+        my $l = (sort { $b <=> $a } map { length($_) } keys %{$self->{'config'}{$section}})[0];
+        $lkey = $l if $l > $lkey;
+
+        $l = (sort { $b <=> $a } map { length($_) } values %{$self->{'config'}{$section}})[0];
+        $lval = $l if $l > $lval;
+    }
+
+    # width of each section           [..<key>..<value>....]   [Host: <host>....]
+    my $swidth = (sort { $b <=> $a } ($lkey + $lval + 8,       length($label) + $lname + 6))[0];
+
+    # how many can we fit on the terminal? (minus a col to prevent wrapping)
+    my $sections_per_line = int($cols / ($swidth + 1));
+
+    my $section_block;
+    for (my $i = 0; $i < scalar(@sections); $i += $sections_per_line) {
+        my @row_sections = grep { defined $_ } @sections[$i..$i+$sections_per_line-1];
+
+        # most rows from a section for this "line" of output
+        my $srows = (sort { $b <=> $a } map { scalar(keys(%{$self->{'config'}{$_}})) } @row_sections)[0];
+
+        my @row_lines;
+
+        $self->append_section_summary(\@row_lines, $_, $swidth, $label, $srows, $lname, $lkey, $lval)
+            for @row_sections;
+
+        $section_block .= join("\n", @row_lines) . "\n\n";
+        @row_lines = ();
+    }
+
+    print $section_block;
+}
+
+sub append_section_summary {
+    my ($self, $lines, $host, $width, $label, $rows, $lname, $lkey, $lval) = @_;
+
+    $rows += 2; # need to account for the header and rule lines
+
+    my @host_lines = (
+        sprintf("%s%-${width}s%s", color('bold blue'), sprintf("%s: %s    ", $label, $host), color('reset')),
+        sprintf('%s%s%s  ', color('bold blue'), '-'x($width-2), color('reset'))
+    );
+
+    foreach my $key (sort keys %{$self->{'config'}{$host}}) {
+        push(@host_lines, sprintf("  %s%-${lkey}s%s  %-${lval}s    ",
+            color('green'), $key, color('reset'), $self->{'config'}{$host}{$key}));
+    }
+
+    for (my $i = 0; $i < $rows; $i++) {
+        my $line = scalar(@host_lines) > 0 ? shift(@host_lines) : " "x$width;
+
+        $lines->[$i] = "" unless $lines->[$i];
+        $lines->[$i] .= $line;
+    }
+}
+
+sub read_config {
+    my ($path) = @_;
+
+    my %cfg;
+    my $section = 'common';
+
+    open(my $fh, '<', $path) or Failover::Utils::die_error('Error opening %s: %s', $path, $!);
+    while (my $line = <$fh>) {
+        if ($line =~ m{^\[([^\[]+)\]\s*$}o) {
+            $section = lc($1);
+            validate_section_name($section)
+                or Failover::Utils::die_error('Invalid section %s at line %s.', $section, $.);
+            Failover::Utils::die_error('Section %s defined more than once (line %s).', $section, $.)
+                if exists $cfg{$section};
+            $cfg{$section} = {};
             next;
         }
 
-        if ( $l =~ m{\A([a-zA-Z0-9_-]+)\s*=\s*(\S.*)\z} ) {
-            my ( $param, $value ) = ( $1, $2 );
-            if ( !defined $current_section ) {
-                $self->show_help_and_die( 'Line: "%s" in config is before any section header!', $l );
-            }
-            if ( $param =~ s/^(old|new)-// ) {
-                my $host = $1;
-                $self->{ 'cfg' }->{ $current_section }->{ $host }->{ $param } = $value;
-            }
-            else {
-                $self->{ 'cfg' }->{ $current_section }->{ $param } = $value;
-            }
+        if ($line =~ m{^(.*)=(.*)$}o) {
+            my ($setting, $value) = (lc($1), $2);
+
+            $setting = validate_setting_name($setting)
+                or Failover::Utils::die_error('Invalid setting %s at line %s in section %s', $setting, $., $section);
+
+            $cfg{$section}{$setting} = clean_value($value);
             next;
         }
 
-        $self->show_help_and_die( 'Unknown line: "%s" in config!', $l );
+        Failover::Utils::die_error('Invalid configuration entry found at line %s.', $.) if $line !~ m{^\s*$}os;
     }
-    close $fh;
+    close($fh);
+
+    return \%cfg;
+}
+
+sub validate {
+    my ($self) = @_;
+
+    Failover::Utils::die_error('No configuration present.') unless exists $self->{'config'};
+
+    $self->normalize_host($_) for grep { $_ =~ m{host-.+}o } keys %{$self->{'config'}};
+    $self->normalize_checks($_) for grep { $_ =~ m{data-check-.+}o } keys %{$self->{'config'}};
+    $self->normalize_backup();
+    $self->normalize_shared();
+
+    return 1;
+}
+
+sub normalize_backup {
+    my ($self) = @_;
+
+    Failover::Utils::die_error('No backup server defined.') unless exists $self->{'config'}{'backup'};
+    $self->normalize_section('backup', qw( host user path ));
+}
+
+sub normalize_checks {
+    my ($self, $check) = @_;
+
+    $self->normalize_section($check, qw( query result ));
+}
+
+sub normalize_host {
+    my ($self, $host) = @_;
+
+    $self->normalize_section($host, qw( host user interface method pgdata pgconf pg-restart pg-reload omnipitr ));
+
+    if (!exists $self->{'config'}{$host}{'host'}) {
+        Failover::Utils::die_error('Could not deduce hostname from section name %s.', $host)
+            unless $host =~ m{^host-(.+)$}os;
+        $self->{'config'}{$host}{'host'} = $1;
+    }
+}
+
+sub normalize_shared {
+    my ($self) = @_;
+
+    Failover::Utils::die_error('No shared IP section defined.') unless exists $self->{'config'}{'shared-ip'};
+    $self->normalize_section('shared-ip', qw( host port database user ));
+}
+
+sub normalize_section {
+    my ($self, $section, @settings) = @_;
+
+    Failover::Utils::die_error('Invalid host section name: %s', $section) unless exists $self->{'config'}{$section};
+    Failover::Utils::die_error('No settings defined for verification.') if scalar(@settings) < 1;
+
+    foreach my $key (@settings) {
+        next if exists $self->{'config'}{$section}{$key};
+        $self->{'config'}{$section}{$key} = $self->{'config'}{'common'}{$key}
+            if exists $self->{'config'}{'common'}{$key};
+    }
+
+    return 1;
+}
+
+sub clean_value {
+    my ($value) = @_;
+
+    $value =~ s{(^\s+|\s+$)}{}ogs;
+    $value =~ s{(^["']|["']$)}{}ogs if $value =~ m{^(["']).+\1$}os;
+
+    return $value;
+}
+
+sub validate_section_name {
+    my ($name) = @_;
+
+    return 1 if grep { $_ eq $name } qw( common shared-ip backup );
+    return 1 if $name =~ m{^host-[a-z0-9-]+$}o;
+    return 1 if $name =~ m{^data-check(-[a-z0-9-]+)?$}o;
+    return 0;
+}
+
+sub validate_setting_name {
+    my ($name) = @_;
+
+    $name =~ s{(^\s+|\s+$)}{}ogs;
+
+    return $name if grep { $_ eq $name }
+        qw( host port database user interface method trigger-file query result
+            pgdata pgconf pg-restart pg-reload omnipitr path );
     return;
 }
 
-sub run_command {
-    my $self = shift;
-    my @cmd  = @_;
+sub section {
+    my ($self, $section) = @_;
 
-    my $real_command = join( ' ', map { quotemeta } @cmd );
-    if ( $ENV{ 'DRY_RUN' } ) {
-        print "\n\nRunning: $real_command\n";
-        return (
-            {
-                'real_command' => $real_command,
-                'status'       => 0,
-                'stdout'       => '',
-                'stderr'       => ''
-            }
-        );
-    }
-
-    my ( $stdout_fh, $stdout_filename ) = tempfile( "failover.$PROCESS_ID.stdout.XXXXXX" );
-    my ( $stderr_fh, $stderr_filename ) = tempfile( "failover.$PROCESS_ID.stderr.XXXXXX" );
-
-    $real_command .= sprintf ' 2>%s >%s', quotemeta $stderr_filename, quotemeta $stdout_filename;
-
-    my $reply = {};
-    $reply->{ 'real_command' } = $real_command;
-    $reply->{ 'status' }       = system $real_command;
-    local $/ = undef;
-    $reply->{ 'stdout' } = <$stdout_fh>;
-    $reply->{ 'stderr' } = <$stderr_fh>;
-
-    close $stdout_fh;
-    close $stderr_fh;
-
-    unlink( $stdout_filename, $stderr_filename );
-
-    if ( $CHILD_ERROR == -1 ) {
-        $reply->{ 'error_code' } = $OS_ERROR;
-    }
-    elsif ( $CHILD_ERROR & 127 ) {
-        $reply->{ 'error_code' } = sprintf "child died with signal %d, %s coredump\n", ( $CHILD_ERROR & 127 ), ( $CHILD_ERROR & 128 ) ? 'with' : 'without';
-    }
-    else {
-        $reply->{ 'error_code' } = $CHILD_ERROR >> 8;
-    }
-
-    return $reply;
+    Failover::Utils::die_error('Invalid configuration section %s requested.', $section)
+        if !defined $section || !exists $self->{'config'}{$section};
+    return $self->{'config'}{$section};
 }
 
-sub show_help_and_die {
-    my $self = shift;
-    my ( $msg, @args ) = @_;
-    if ( defined $msg ) {
-        printf STDERR $msg . "\n\n", @args;
-    }
+sub get_hosts {
+    my ($self) = @_;
 
-    print STDERR <<_END_OF_HELP_;
-Syntax:
-    $PROGRAM_NAME config_file
-
-Config file should be full path, to readable file, with information about PostgreSQL cluster.
-
-Example file content:
----------------------
-[ip-takeover]
-old-host=master
-new-host=slave
-old-type=ifupdown
-old-interface=eth0:0
-new-type=ifupdown
-new-interface=eth0:0
-ip=db
-
-[db-promotion]
-host=slave
-user=postgres
-trigger-file=/tmp/trigger.file
-
-[db-check]
-user=postgres
-port=5432
-database=postgres
-
-[data-check-1]
-query=select (now() - max(created_on)) < '5 minutes'::interval from objects
-result=t
-
-[data-check-2]
-query=select (now() - max(logged_on)) < '15 minutes'::interval from users
-result=t
----------------------
-
-For more information about config file, please run:
-
-    perldoc $FindBin::Bin/docs/failover.pod
-
-If you want to run without requiring confirmation, set shell environment variable
-
-    FAILOVER
-
-to value "confirmed". In bash, it can be done using:
-
-    FAILOVER=confirmed $PROGRAM_NAME config_file
-_END_OF_HELP_
-    exit 1;
+    return grep { $_ =~ m{^host-}o } keys %{$self->{'config'}};
 }
 
-=head1 NAME failover.pl - script to automate PostgreSQL failover.
+sub get_backups {
+    my ($self) = @_;
 
-This is just developer information.
+    return grep { $_ =~ m{^backup}o } keys %{$self->{'config'}};
+}
 
-If you're looking for manual for failover.pl, just run:
+sub get_data_checks {
+    my ($self) = @_;
 
-    failover.pl --help
+    return grep { $_ =~ m{^data-check}o } keys %{$self->{'config'}};
+}
 
-and check the lines "For more information ..."
+sub get_shared_ip {
+    my ($self) = @_;
 
-=head1 Control flow
+    return $self->{'config'}{'shared-ip'};
+}
 
-When running failover.pl, the only bit of program is:
 
-    Failover->new()->run();
+package Failover::Utils;
 
-which runs constructor (new()) in Failover class, and on returned object, it
-runs ->run() method.
+use strict;
+use warnings;
 
-new(), doesn't do anything aside from object creation.
+use File::Basename;
+use Term::ANSIColor;
 
-run() wraps all the work:
+sub die_error {
+    print_error(@_);
+    exit(255);
+}
 
-=over
+sub get_confirmation {
+    my ($question, $default) = @_;
 
-=item * loading config (call to ->get_config())
+    $default = defined $default && $default =~ m{^(y(es)?|no?)$}oi ? lc(substr($default, 0, 1)) : 'n';
 
-=item * validating config (call to ->verify_config())
+    printf('%s [%s/%s]: ', $question,
+        ( $default eq 'y'
+            ? (color('bold') . 'Y' . color('reset'), 'n')
+            : ('y', color('bold') . 'N' . color('reset'))
+        ));
 
-=item * printing config, and getting user confirmation (call to ->get_user_confirmation())
+    my $r = <STDIN>;
+    chomp $r;
 
-=item * running code to do ip takeover (call to ->switch_ip())
+    return 1 if $r =~ m{^\s*y(es)?\s*$}oi;
 
-=item * promoting slave to standalone/master (call to ->promote_slave())
+    if ($r =~ m{^\s*(no?)?\s*$}oi) {
+        print color('red'), 'Exiting.', color('reset'), "\n";
+        exit(0);
+    }
 
-=item * running data checks (call to ->data_checks())
+    print "I'm sorry, you entered a response that I did not understand. Please try again.\n";
+    get_confirmation($question, $default);
+}
 
-=back
+sub log {
+    my ($fmt, @args) = @_;
 
-If any if the last 3 steps would fail - whole procedure is aborted.
+    $fmt = '' unless defined $fmt && length($fmt) > 0;
+    @args = () unless @args;
 
-Finally run() prints "All done.", which is signal to user that everything
-went fine. If anything would go wrong - "All done" will not be printed.
+    my ($sname) = fileparse(__FILE__);
+    printf("%s[%s]%s - %s - %d - %s\n",
+        color('yellow'), scalar(localtime()), color('reset'), $sname, $$,
+            sprintf($fmt, map { color('yellow') . $_ . color('reset') } @args)
+    );
+}
 
-=head1 Methods
+sub print_error {
+    my $error;
 
-=head2 new()
+    if (scalar(@_) > 1 && $_[0] =~ m{\%}o) {
+        $error = sprintf(shift @_, map { color('yellow') . $_ . color('reset') } @_);
+    } elsif (scalar(@_) > 1) {
+        $error = join(' ', @_);
+    } elsif (scalar(@_) == 1) {
+        $error = $_[0];
+    } else {
+        return;
+    }
 
-Just object creation. No logic inside.
+    printf("%sERROR:%s %s\n", color('bold red'), color('reset'), $error);
+}
 
-=head2 run()
+sub sort_section_names {
+    my @names = @_;
 
-Main function which calls other methods to do actual work. There is very
-little logic there: setting autoflush on stdout, and calling exit if
-failover functions would fail.
+    # get length of longest complete section name, to set sane format lengths for sorting below
+    my $l = (sort { $b <=> $a } map { length($_) } @names)[0];
 
-=head2 data_checks()
+    my %maps;
+    $maps{$_->[0]} = $_->[1] for map {
+        $_ =~ m{^(.+\D)(\d+)$}o ? [sprintf("%-${l}s - %0${l}d", $1, $2), $_] : [$_, $_]
+    } @names;
 
-Runs all data checks as supplies in data-check-* sections in .ini.
+    return map { $maps{$_} } sort keys %maps;
+}
 
-Order of running them is ascii-betical, and failover.pl will stop on first
-error.
+sub term_width {
+    return $ENV{'COLUMNS'} if exists $ENV{'COLUMNS'} && $ENV{'COLUMNS'} =~ m{^\d+$}o;
 
-=head2 promote_slave()
+    my $cols = `stty -a`;
+    return $1 if defined $cols && $cols =~ m{columns\s+(\d+)}ois;
 
-Runs "touch trigger_file" over ssh, and then, in a loop, connects to slave
-db and tries to create temporary table - which will fail as long as the
-database is read only or not accessible.
+    $cols = `tput cols 2>/dev/null`;
+    return $cols if defined $cols && $cols =~ m{^\d+$}o;
 
-=head2 ping()
-
-Helper function which does TCP ping to given host:port, with given timeout,
-and returns success/failure.
-
-=head2 switch_ip()
-
-Does IP takeover procedure.
-
-First it tries to ping shared IP.
-
-Then it conencts over ssh to current master, to bring down network
-interface.
-
-Afterwards - connects to new master and brings interface up.
-
-Finally - pings again (with longer timeout) to see if takeover worked.
-
-=head2 psql()
-
-Helper function, calls psql with given query, and specialized options
-(-qAtX, appropriate -h, -p, -U and -d), and returns structure from
-run_command(), in which, under "stdout" key - there is return value from the
-query.
-
-=head2 ssh()
-
-Helper functions which runs given command over ssh, and returns standard
-run_command() structure.
-
-=head2 network_interface_change()
-
-Methods which returns command that should be used to change network
-interface state (up/down).
-
-Currently there is no logic there, but there will be when we'll add more
-host types than "ifupdown". Other ideas might be "ifconfig", "iproute2" or
-even things like "amazon-eip".
-
-=head2 status()
-
-Prints information about what is being currently done, formatted nicely to
-leave place for information how given step ended (OK, WARN, ERROR).
-
-=head2 status_change()
-
-Prints given message, and colors it appropriately depending on first word
-being "OK", "WARN" or "ERROR".
-
-=head2 get_user_confirmation()
-
-Prints setup summary, and asks user for explcit confirmation that it's ok.
-
-If FAILVOER environment variable is set and contains "confirmed" value - it
-skips requesting confirmation.
-
-=head2 show_configuration_section()
-
-Helper function that prints formatted data about single section from
-configuration.
-
-=head2 verify_config()
-
-All logic to verify that passed config is sane and contains all required
-data.
-
-=head2 get_config()
-
-Loads and parses given config file. To avoid non-core-perl requirements,
-I wrote simple, regexp-based, ini-format parser. it's not fully, 100%
-robust, but should work in majority of cases.
-
-=head2 run_command()
-
-Runs, safely, given command, recording stdout and stderr, and returns
-hashref with following keys:
-
-=over
-
-=item * stdout - what command printed on stdout
-
-=item * stderr - what command printed on stderr
-
-=item * real_command - what command was actually executed (with all special
-characters escaped, and so on)
-
-=item * status - value returned by system() call
-
-=item * error_code - empty if there is no error, or more descriptive error
-information. Can be error core, or information about process being killed.
-
-=back
-
-=head2 show_help_and_die()
-
-As name suggests - prints short help page, and exists program.
-
-=cut
+    return 80;
+}
 
 1;
