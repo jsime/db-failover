@@ -198,6 +198,33 @@ sub test_setup {
         Failover::Utils::get_confirmation('Backup host failed connectivity check. Proceed anyway?')
             unless $self->skip_confirmation;
     }
+
+    my %dirchecks = (
+        pgdata   => ['PostgreSQL Data Directory',undef],
+        pgconf   => ['PostgreSQL Configuration','postgresql.conf'],
+        omnipitr => ['OmniPITR Directory',undef],
+    );
+
+    # Test various directory locations on all hosts
+    foreach my $host (Failover::Utils::sort_section_names($self->config->get_hosts)) {
+        foreach my $dirname (qw( pgdata pgconf omnipitr)) {
+            my $setting = $self->config->section($host)->{$dirname} || undef;
+            Failover::Utils::die_error('Setting %s not defined for Host %s.', $dirname, $host)
+                unless defined $setting;
+
+            my $cmd = Failover::Command->new('ls',$setting,$dirchecks{$dirname}[1])
+                ->name(sprintf('Checking %s - %s', $dirchecks{$dirname}[0], $host))
+                ->verbose($self->verbose)
+                ->host($self->config->section($host)->{'host'})
+                ->user($self->config->section($host)->{'user'})
+                ->ssh->run($self->dry_run);
+
+            next if $cmd->status == 0;
+            exit(1) if $self->exit_on_error;
+            Failover::Utils::die_error('%s could not be located at %s on host %s', $dirchecks{$dirname}[0],
+                $setting, $host);
+        }
+    }
 }
 
 sub config {
