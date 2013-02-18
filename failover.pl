@@ -128,6 +128,19 @@ sub show_config {
 sub test_setup {
     my ($self) = @_;
 
+    # Ping check Shared IP
+    foreach my $host (Failover::Utils::sort_section_names($self->config->get_shared_ips)) {
+        my $cmd = Failover::Command->new('ping -q -c 10 -i 0.2',$self->config->section($host)->{'host'})
+            ->verbose($self->verbose)
+            ->name(sprintf('Ping Test - %s', $host))
+            ->run($self->dry_run);
+
+        next if $cmd->status == 0;
+        exit(1) if $self->exit_on_error;
+        Failover::Utils::get_confirmation('Current Shared IP host failed ping check. Proceed anyway?')
+            unless $self->skip_confirmation;
+    }
+
     # Test SSH connectivity to all database hosts
     foreach my $host (Failover::Utils::sort_section_names($self->config->get_hosts)) {
         my $cmd = Failover::Command->new('/bin/true')->name(sprintf('Connectivity Test - %s', $host))
@@ -138,7 +151,7 @@ sub test_setup {
 
         next if $cmd->status == 0;
         exit(1) if $self->exit_on_error;
-        Failover::Utils::get_confirmation('Host failed connectivity check. Proceed anyway?')
+        Failover::Utils::get_confirmation('Database host failed connectivity check. Proceed anyway?')
             unless $self->skip_confirmation;
     }
 
@@ -152,7 +165,7 @@ sub test_setup {
 
         next if $cmd->status == 0;
         exit(1) if $self->exit_on_error;
-        Failover::Utils::get_confirmation('Host failed connectivity check. Proceed anyway?')
+        Failover::Utils::get_confirmation('Backup host failed connectivity check. Proceed anyway?')
             unless $self->skip_confirmation;
     }
 }
@@ -685,10 +698,10 @@ sub get_data_checks {
     return grep { $_ =~ m{^data-check}o } keys %{$self->{'config'}};
 }
 
-sub get_shared_ip {
+sub get_shared_ips {
     my ($self) = @_;
 
-    return $self->{'config'}{'shared-ip'};
+    return grep { $_ =~ m{^shared-ip}o } keys %{$self->{'config'}};
 }
 
 
