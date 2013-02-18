@@ -141,6 +141,20 @@ sub test_setup {
             unless $self->skip_confirmation;
     }
 
+    # PSQL Data Checks for Shared IPs
+    foreach my $check (Failover::Utils::sort_section_names($self->config->get_data_checks)) {
+        foreach my $host (Failover::Utils::sort_section_names($self->config->get_shared_ips)) {
+            my $cmd = Failover::Command->new($self->config->section($check)->{'query'})
+                ->verbose($self->verbose)
+                ->name(sprintf('Data Check - %s - Host: %s', $check, $host))
+                ->host($self->config->section($host)->{'host'})
+                ->port($self->config->section($host)->{'port'})
+                ->user($self->config->section($host)->{'user'})
+                ->database($self->config->section($host)->{'database'})
+                ->psql->run($self->dry_run);
+        }
+    }
+
     # Test SSH connectivity to all database hosts
     foreach my $host (Failover::Utils::sort_section_names($self->config->get_hosts)) {
         my $cmd = Failover::Command->new('/bin/true')->name(sprintf('Connectivity Test - %s', $host))
@@ -308,7 +322,7 @@ sub psql {
     push(@psql_cmd, '-U', $self->{'user'})     if exists $self->{'user'} && $self->{'user'} =~ m{\w+}o;
     push(@psql_cmd, '-d', $self->{'database'}) if exists $self->{'database'} && $self->{'database'} =~ m{\w+}o;
 
-    push(@psql_cmd, '-c', '"' . quotemeta(join(' ', @{$self->{'command'}})) . '"');
+    push(@psql_cmd, '-c', quotemeta(join(' ', @{$self->{'command'}})));
 
     $self->{'command'} = \@psql_cmd;
 
