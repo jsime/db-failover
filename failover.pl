@@ -893,6 +893,9 @@ sub read_config {
 
     open(my $fh, '<', $path) or Failover::Utils::die_error('Error opening %s: %s', $path, $!);
     while (my $line = <$fh>) {
+        # remove comments
+        $line =~ s{\#.*$}{}o;
+
         if ($line =~ m{^\[([^\[]+)\]\s*$}o) {
             $section = lc($1);
             validate_section_name($section)
