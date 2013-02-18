@@ -128,6 +128,16 @@ sub show_config {
 sub test_setup {
     my ($self) = @_;
 
+    my %promote_demote_overlap;
+    foreach my $host ($self->promote) {
+        $promote_demote_overlap{$_} = 1 for grep { $_ eq $host } $self->demote;
+    }
+    if (scalar(keys(%promote_demote_overlap)) > 0) {
+        my $fmt_list = join(', ', ('%s') x scalar(keys(%promote_demote_overlap)));
+        Failover::Utils::die_error("You are attempting to both promote and demote the following hosts: $fmt_list",
+            Failover::Utils::sort_section_names(keys %promote_demote_overlap));
+    }
+
     # Ping check Shared IP
     foreach my $host (Failover::Utils::sort_section_names($self->config->get_shared_ips)) {
         my $cmd = Failover::Command->new('ping -q -c 10 -i 0.2',$self->config->section($host)->{'host'})
