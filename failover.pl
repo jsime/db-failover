@@ -117,6 +117,17 @@ sub run {
     # Run configuration/host tests to verify current operational status before performing any actions
     $self->test_setup;
 
+    # Run through hosts to be promoted
+    Failover::Action->promotion($self, $_) for Failover::Utils::sort_section_names($self->promote);
+
+    # If we've made it past promotion, then take the last host from the list and allow it to take over
+    # the shared IP (the list is, for now, only either 0 or 1 hosts long, but should --promote ever
+    # allow multiple uses, I'd like this to at least not go completely bonkers with IP reassignments)
+    my $new_ip_host = (Failover::Utils::sort_section_names($self->promote))[-1];
+    Failover::Action->ip_takeover($self, $new_ip_host) if defined $new_ip_host;
+
+    # Run through hosts to be demoted
+    Failover::Action->demotion($self, $_) for Failover::Utils::sort_section_names($self->demote);
 }
 
 sub show_config {
@@ -179,8 +190,8 @@ sub test_setup {
                 ->verbose($self->verbose)
                 ->name(sprintf('Data Check - %s - Host: %s', $check, $host))
                 ->host($self->config->section($host)->{'host'})
-                ->port($self->config->section($host)->{'port'})
-                ->user($self->config->section($host)->{'user'})
+                ->port($self->config->section($host)->{'pgport'})
+                ->user($self->config->section($host)->{'pguser'})
                 ->database($self->config->section($host)->{'database'})
                 ->compare($self->config->section($check)->{'result'})
                 ->psql->run($self->dry_run);
@@ -302,6 +313,63 @@ sub verbose {
     my ($self) = @_;
 
     return $self->{'options'}{'verbose'} if exists $self->{'options'}{'verbose'};
+    return 0;
+}
+
+
+package Failover::Action;
+
+use strict;
+use warnings;
+
+sub ip_takeover {
+    my ($class, $failover, $host) = @_;
+}
+
+sub demotion {
+    my ($class, $failover, $host) = @_;
+}
+
+sub promotion {
+    my ($class, $failover, $host) = @_;
+
+    my $host_cfg = $failover->config->section($host);
+    Failover::Utils::die_error('Invalid host %s given for promotion.', $host) unless defined $host_cfg;
+
+    Failover::Utils::die_error('No OmniPITR trigger file path provided for %s.', $host)
+        unless exists $host_cfg->{'trigger_file'};
+
+    # Create trigger file for OmniPITR to finish WAL recovery mode
+    my $cmd = Failover::Command->new('touch', $host_cfg->{'trigger_file'})
+        ->name(sprintf('Promotion trigger file - %s', $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+    Failover::Utils::die_error('Failed to create promotion trigger file on %s.', $host)
+        unless $cmd->status == 0;
+
+    my $timeout = time() + ($host_cfg->{'timeout'} || 60);
+    $cmd = Failover::Command->new('create temp table failover_check ( i int4 )')
+        ->name(sprintf('Verification of %s PostgreSQL in R/W mode', $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'pgport'})
+        ->database($host_cfg->{'database'})
+        ->user($host_cfg->{'pguser'})
+        ->psql;
+
+    do {
+        $cmd->run($failover->dry_run);
+    } while ($cmd->status != 0 && time() < $timeout);
+
+    return 1 if $cmd->status == 0;
+
+    Failover::Utils::print_error("Could not promote PostgreSQL on %s.\n%s", $host, $cmd->stderr);
+    exit(1) if $failover->exit_on_error;
+    Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+
     return 0;
 }
 
@@ -743,7 +811,11 @@ sub normalize_checks {
 sub normalize_host {
     my ($self, $host) = @_;
 
-    $self->normalize_section($host, qw( host user interface method pgdata pgconf pg-restart pg-reload omnipitr ));
+    $self->normalize_section($host, qw(
+        host user interface method timeout
+        pgdata pgconf pguser pgport database pg-restart pg-reload
+        omnipitr trigger-file
+    ));
 
     if (!exists $self->{'config'}{$host}{'host'}) {
         Failover::Utils::die_error('Could not deduce hostname from section name %s.', $host)
@@ -756,7 +828,9 @@ sub normalize_shared {
     my ($self) = @_;
 
     Failover::Utils::die_error('No shared IP section defined.') unless exists $self->{'config'}{'shared-ip'};
-    $self->normalize_section('shared-ip', qw( host port database user ));
+    $self->normalize_section('shared-ip', qw(
+        host port database user pgport pguser
+    ));
 }
 
 sub normalize_section {
@@ -799,7 +873,7 @@ sub validate_setting_name {
 
     return $name if grep { $_ eq $name }
         qw( host port database user interface method trigger-file query result
-            pgdata pgconf pg-restart pg-reload omnipitr path );
+            pgdata pgconf pgport pguser pg-restart pg-reload omnipitr path timeout );
     return;
 }
 
