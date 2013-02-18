@@ -325,11 +325,70 @@ use warnings;
 sub ip_takeover {
     my ($class, $failover, $host) = @_;
 
+    my $host_cfg = $failover->config->section($host);
+
+    if (!defined $host_cfg) {
+        Failover::Utils::print_error('Invalid host %s given for Shared IP takover.', $host);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+        return 0;
+    }
+
+    foreach my $key (qw( method interface )) {
+        if (!exists $host_cfg->{$key}) {
+            Failover::Utils::print_error('IP Takeover %s for %s is missing.', $key, $host);
+            exit(1) if $failover->exit_on_error;
+            Failover::Utils::get_confirmation('Unable to perform IP takeover on this host. Proceed anyway?')
+                if !$failover->skip_confirmation;
+            return 0;
+        }
+    }
+
+    if (scalar(grep { $host_cfg->{'method'} eq $_ } qw( none ifupdown )) < 1) {
+        Failover::Utils::print_error('IP Takeover method for %s is invalid.', $host);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Unable to perform IP takeover on this host. Proceed anyway?')
+            if !$failover->skip_confirmation;
+        return 0;
+    }
+
     # get all hosts other than the one taking over the shared IP, as we need to ensure
     # none of them continue to think they should have it
     foreach my $yield_host (grep { $_ ne $host } $failover->config->get_hosts) {
         Failover::Action->ip_yield($failover, $yield_host);
     }
+
+    # Now that IP should no longer be claimed by anyone else, attempt to take it over on
+    # the requested host.
+    return 1 if $host_cfg->{'method'} eq 'none';
+
+    my $cmd;
+
+    if ($host_cfg->{'method'} eq 'ifupdown') {
+        $cmd = Failover::Command->new(cmd_ifupdown('up', $host_cfg->{'interface'}));
+    }
+
+    if (!defined $cmd) {
+        Failover::Utils::print_error('IP Takeover method for %s is invalid.', $host);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Unable to perform IP takeover on this host. Proceed anyway?')
+            if !$failover->skip_confirmation;
+        return 0;
+    }
+
+    $cmd->name(sprintf('Starting up interface %s on %s.', $host_cfg->{'interface'}, $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    return 1 if $cmd->status == 0;
+
+    exit(1) if $failover->exit_on_error;
+    Failover::Utils::get_confirmation('Interface was not enabled properly. Proceed anyway?')
+        if !$failover->skip_confirmation;
+    return 0;
 }
 
 sub ip_yield {
@@ -346,7 +405,7 @@ sub ip_yield {
 
     foreach my $key (qw( method interface )) {
         if (!exists $host_cfg->{$key}) {
-            Failover::Utils::print_error('IP Takeover/Yield %s for %s is missing.', $key, $host);
+            Failover::Utils::print_error('IP Yield %s for %s is missing.', $key, $host);
             exit(1) if $failover->exit_on_error;
             Failover::Utils::get_confirmation('Unable to perform IP yield on this host. Proceed anyway?')
                 if !$failover->skip_confirmation;
@@ -378,7 +437,7 @@ sub ip_yield {
         return 0;
     }
 
-    $cmd->name(sprintf('Shutting down interface %s on host %s.', $host_cfg->{'interface'}, $host))
+    $cmd->name(sprintf('Shutting down interface %s on %s.', $host_cfg->{'interface'}, $host))
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
         ->port($host_cfg->{'port'})
