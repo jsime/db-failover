@@ -153,6 +153,11 @@ sub test_setup {
                 ->database($self->config->section($host)->{'database'})
                 ->compare($self->config->section($check)->{'result'})
                 ->psql->run($self->dry_run);
+
+            next if $cmd->status == 0;
+            exit(1) if $self->exit_on_error;
+            Failover::Utils::get_confirmation('Data check failed. Proceed anyway?')
+                unless $self->skip_confirmation;
         }
     }
 
