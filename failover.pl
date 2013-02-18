@@ -394,7 +394,8 @@ sub run {
         $self->{'status'} = 0;
         $self->{'stdout'} = '';
         $self->{'stderr'} = '';
-        return $self->{'silent'} ? 1 : $self->print_ok();;
+        $self->print_ok() unless $self->{'silent'};
+        return $self;
     }
 
     my ($stdout_fh, $stdout_filename) = tempfile("failover.$$.stdout.XXXXXX");
