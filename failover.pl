@@ -151,6 +151,7 @@ sub test_setup {
                 ->port($self->config->section($host)->{'port'})
                 ->user($self->config->section($host)->{'user'})
                 ->database($self->config->section($host)->{'database'})
+                ->compare($self->config->section($check)->{'result'})
                 ->psql->run($self->dry_run);
         }
     }
@@ -310,6 +311,16 @@ sub verbose {
     return $self;
 }
 
+sub compare {
+    my ($self, $comparison) = @_;
+
+    $self->{'comparison'} = $comparison if defined $comparison;
+    $self->{'comparison'} =~ s{(^\s+|\s+$)}{}ogs if exists $self->{'comparison'};;
+    Failover::Utils::log('Command object output comparison set to %s.', $self->{'comparison'}) if $self->{'verbose'};
+
+    return $self;
+}
+
 sub psql {
     my ($self) = @_;
 
@@ -380,6 +391,9 @@ sub run {
     $self->{'stdout'} = <$stdout_fh>;
     $self->{'stderr'} = <$stderr_fh>;
 
+    $self->{'stdout'} =~ s{(^\s+|\s+$)}{}ogs;
+    $self->{'stderr'} =~ s{(^\s+|\s+$)}{}ogs;
+
     if ($self->{'verbose'} >= 2 && length($self->{'stdout'}) > 0) {
         Failover::Utils::log('Command Object STDOUT: %s', $_) for split(/\n/, $self->{'stdout'});
     }
@@ -389,7 +403,13 @@ sub run {
     }
 
     if ($self->{'status'} == 0) {
-        $self->print_ok() unless $self->{'silent'};
+        if (exists $self->{'comparison'} && $self->{'stdout'} ne $self->{'comparison'}) {
+            $self->print_fail('Unexpected command output. Got %s, Expected %s.',
+                $self->{'stdout'}, $self->{'comparison'}) unless $self->{'silent'};
+            $self->{'status'} = 1; # fake an error status to make sure caller reacts properly
+        } else {
+            $self->print_ok() unless $self->{'silent'};
+        }
     } else {
         if ($self->{'child_error'} == -1) {
             $self->print_fail('Failed to execute: %s', $self->{'os_error'});
