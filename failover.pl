@@ -212,8 +212,8 @@ sub test_setup {
             Failover::Utils::die_error('Setting %s not defined for Host %s.', $dirname, $host)
                 unless defined $setting;
 
-            my $cmd = Failover::Command->new('ls',$setting,$dirchecks{$dirname}[1])
-                ->name(sprintf('Checking %s - %s', $dirchecks{$dirname}[0], $host))
+            my $cmd = Failover::Command->new('ls',$setting . '/' . ($dirchecks{$dirname}[1] || ''))
+                ->name(sprintf('Check %s for %s', $host, $dirchecks{$dirname}[0]))
                 ->verbose($self->verbose)
                 ->host($self->config->section($host)->{'host'})
                 ->user($self->config->section($host)->{'user'})
