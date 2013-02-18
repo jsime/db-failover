@@ -128,6 +128,27 @@ sub show_config {
 sub test_setup {
     my ($self) = @_;
 
+    my $gen_cmd = Failover::Command->new('/bin/false');
+
+    # Check for invalid IP takeover methods
+    $gen_cmd->print_running('Verifying IP Takeover methods.');
+    my @bad_methods;
+
+    foreach my $host (Failover::Utils::sort_section_names($self->config->get_hosts)) {
+        push(@bad_methods, $host) unless exists $self->config->section($host)->{'method'}
+            && grep { $_ eq $self->config->section($host)->{'method'} } qw( none ifupdown );
+    }
+
+    if (scalar(@bad_methods) > 0) {
+        $gen_cmd->print_fail('Invalid IP Takeover methods on hosts: ' . join(', ', @bad_methods));
+        exit(1) if $self->exit_on_error;
+        Failover::Utils::get_confirmation('Will be unable to perform IP takeover on some hosts. Proceed anyway?')
+            unless $self->skip_confirmation;
+    } else {
+        $gen_cmd->print_ok();
+    }
+
+    # Ensure that the user is not trying to promote and demote any of the same systems
     my %promote_demote_overlap;
     foreach my $host ($self->promote) {
         $promote_demote_overlap{$_} = 1 for grep { $_ eq $host } $self->demote;
