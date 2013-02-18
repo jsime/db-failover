@@ -122,7 +122,7 @@ sub run {
 sub show_config {
     my ($self) = @_;
 
-    $self->config->display;
+    $self->config->display( promotions => [$self->promote], demotions => [$self->demote] );
 }
 
 sub test_setup {
@@ -193,6 +193,22 @@ sub test_setup {
 sub config {
     my ($self) = @_;
     return $self->{'config'} if exists $self->{'config'};
+    return;
+}
+
+sub demote {
+    my ($self) = @_;
+
+    return @{$self->{'options'}{'demote'}} if exists $self->{'options'}{'demote'}
+        && ref($self->{'options'}{'demote'}) eq 'ARRAY';
+    return $self->{'options'}{'demote'} if exists $self->{'options'}{'demote'};
+    return;
+}
+
+sub promote {
+    my ($self) = @_;
+
+    return $self->{'options'}{'promote'} if exists $self->{'options'}{'promote'};
     return;
 }
 
@@ -511,7 +527,7 @@ sub new {
 }
 
 sub display {
-    my ($self) = @_;
+    my ($self, %opts) = @_;
 
     my $cols = Failover::Utils::term_width();
 
@@ -523,6 +539,21 @@ sub display {
         Failover::Utils::sort_section_names(grep { $_ =~ m{^host-}o } keys %{$self->{'config'}}));
     $self->display_multisection_block($cols, 'Data Check',
         Failover::Utils::sort_section_names(grep { $_ =~ m{^data-check}o } keys %{$self->{'config'}}));
+
+    my @actions;
+
+    if (exists $opts{'promotions'} && ref($opts{'promotions'}) eq 'ARRAY' && scalar(@{$opts{'promotions'}}) > 0) {
+        push(@actions, sprintf('%sPromoting:%s %s', color('bold green'), color('reset'),
+            join(', ', Failover::Utils::sort_section_names(@{$opts{'promotions'}}))));
+    }
+    if (exists $opts{'demotions'} && ref($opts{'demotions'}) eq 'ARRAY' && scalar(@{$opts{'demotions'}}) > 0) {
+        push(@actions, sprintf('%sDemoting:%s  %s', color('bold red'), color('reset'),
+            join(', ', Failover::Utils::sort_section_names(@{$opts{'demotions'}}))));
+    }
+
+    if (scalar(@actions) > 0) {
+        print join("\n", @actions) . "\n\n";
+    }
 }
 
 sub display_multisection_block {
