@@ -413,6 +413,7 @@ sub ssh {
         ? $self->{'user'} . '@' . $self->{'host'}
         : $self->{'host'}
     );
+    push(@ssh_cmd, 'sudo') if $self->{'user'} ne 'root';
     push(@ssh_cmd, map { quotemeta } @{$self->{'command'}}) if exists $self->{'command'} && @{$self->{'command'}};
 
     $self->{'command'} = \@ssh_cmd;
