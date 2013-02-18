@@ -297,7 +297,7 @@ sub silent {
 
     $self->{'silent'} = defined $silent && $silent ? 1 : 0;
     Failover::Utils::log('Command object silence set to %s.', $self->{'silence'} ? 'on' : 'off')
-        if $self->{'verbose'};
+        if $self->{'verbose'} >= 2;
 
     return $self;
 }
@@ -306,7 +306,7 @@ sub verbose {
     my ($self, $verbosity) = @_;
 
     $self->{'verbose'} = defined $verbosity && $verbosity =~ /^\d+$/o ? $verbosity : 0;
-    Failover::Utils::log('Command object verbosity set to %s.', $self->{'verbose'}) if $self->{'verbose'};
+    Failover::Utils::log('Command object verbosity set to %s.', $self->{'verbose'}) if $self->{'verbose'} >= 2;
 
     return $self;
 }
@@ -316,7 +316,8 @@ sub compare {
 
     $self->{'comparison'} = $comparison if defined $comparison;
     $self->{'comparison'} =~ s{(^\s+|\s+$)}{}ogs if exists $self->{'comparison'};;
-    Failover::Utils::log('Command object output comparison set to %s.', $self->{'comparison'}) if $self->{'verbose'};
+    Failover::Utils::log('Command object output comparison set to %s.', $self->{'comparison'})
+        if $self->{'verbose'} >= 2;
 
     return $self;
 }
@@ -324,7 +325,7 @@ sub compare {
 sub psql {
     my ($self) = @_;
 
-    Failover::Utils::log('Marking command object as PSQL command.') if $self->{'verbose'};
+    Failover::Utils::log('Marking command object as PSQL command.') if $self->{'verbose'} >= 3;
 
     my @psql_cmd = qw( psql -qAtX );
 
@@ -343,7 +344,7 @@ sub psql {
 sub ssh {
     my ($self) = @_;
 
-    Failover::Utils::log('Marking command object as SSH remote command.') if $self->{'verbose'};
+    Failover::Utils::log('Marking command object as SSH remote command.') if $self->{'verbose'} >= 3;
     Failover::Utils::die_error('Attempt to issue an SSH command without a hostname.')
         unless exists $self->{'host'} && $self->{'host'} =~ m{\w+}o;
 
@@ -365,7 +366,7 @@ sub run {
     my ($self, $dryrun) = @_;
 
     Failover::Utils::log('Received run request for command object: %s', join(' ', @{$self->{'command'}}))
-        if $self->{'verbose'};
+        if $self->{'verbose'} >= 2;
     $self->print_running($self->{'name'} || join(' ', @{$self->{'command'}}));
 
     if ($dryrun) {
@@ -452,7 +453,7 @@ sub print_fail {
     my ($self, $fmt, @args) = @_;
 
     printf("  [%sFAIL%s]\n", color('bold red'), color('reset')) unless $self->{'silent'};
-    printf("$fmt\n", map { color('yellow') . $_ . color('reset') } @args) if defined $fmt && $self->{'verbose'};
+    printf("           $fmt\n", map { color('yellow') . $_ . color('reset') } @args) if defined $fmt && $self->{'verbose'};
     return 0;
 }
 
