@@ -324,6 +324,73 @@ use warnings;
 
 sub ip_takeover {
     my ($class, $failover, $host) = @_;
+
+    # get all hosts other than the one taking over the shared IP, as we need to ensure
+    # none of them continue to think they should have it
+    foreach my $yield_host (grep { $_ ne $host } $failover->config->get_hosts) {
+        Failover::Action->ip_yield($failover, $yield_host);
+    }
+}
+
+sub ip_yield {
+    my ($class, $failover, $host) = @_;
+
+    my $host_cfg = $failover->config->section($host);
+
+    if (!defined $host_cfg) {
+        Failover::Utils::print_error('Invalid host %s given for Shared IP yield.', $host);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+        return 0;
+    }
+
+    foreach my $key (qw( method interface )) {
+        if (!exists $host_cfg->{$key}) {
+            Failover::Utils::print_error('IP Takeover/Yield %s for %s is missing.', $key, $host);
+            exit(1) if $failover->exit_on_error;
+            Failover::Utils::get_confirmation('Unable to perform IP yield on this host. Proceed anyway?')
+                if !$failover->skip_confirmation;
+            return 0;
+        }
+    }
+
+    if (scalar(grep { $host_cfg->{'method'} eq $_ } qw( none ifupdown )) < 1) {
+        Failover::Utils::print_error('IP Takeover/Yield method for %s is invalid.', $host);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Unable to perform IP yield on this host. Proceed anyway?')
+            if !$failover->skip_confirmation;
+        return 0;
+    }
+
+    return 1 if $host_cfg->{'method'} eq 'none';
+
+    my $cmd;
+
+    if ($host_cfg->{'method'} eq 'ifupdown') {
+        $cmd = Failover::Command->new(cmd_ifupdown('down', $host_cfg->{'interface'}));
+    } # with room left for other interface methods in the future
+
+    if (!defined $cmd) {
+        Failover::Utils::print_error('IP Takeover/Yield method for %s is invalid.', $host);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Unable to perform IP yield on this host. Proceed anyway?')
+            if !$failover->skip_confirmation;
+        return 0;
+    }
+
+    $cmd->name(sprintf('Shutting down interface %s on host %s.', $host_cfg->{'interface'}, $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    return 1 if $cmd->status == 0;
+
+    exit(1) if $failover->exit_on_error;
+    Failover::Utils::get_confirmation('Interface was not shut down properly. Proceed anyway?')
+        if !$failover->skip_confirmation;
+    return 0;
 }
 
 sub demotion {
@@ -372,6 +439,17 @@ sub promotion {
     Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
 
     return 0;
+}
+
+sub cmd_ifupdown {
+    my ($direction, $interface) = @_;
+
+    Failover::Utils::die_error('Interface command requires a new state, and an interface name')
+        unless defined $direction && defined $interface && $interface =~ m{\w}o;
+    Failover::Utils::die_error('Invalid interface state %s provided.', $direction)
+        unless grep { $_ eq $direction } qw( up down );
+
+    return (sprintf('if%s', $direction), $interface);
 }
 
 
