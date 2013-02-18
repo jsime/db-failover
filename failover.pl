@@ -337,10 +337,10 @@ sub promotion {
     Failover::Utils::die_error('Invalid host %s given for promotion.', $host) unless defined $host_cfg;
 
     Failover::Utils::die_error('No OmniPITR trigger file path provided for %s.', $host)
-        unless exists $host_cfg->{'trigger_file'};
+        unless exists $host_cfg->{'trigger-file'};
 
     # Create trigger file for OmniPITR to finish WAL recovery mode
-    my $cmd = Failover::Command->new('touch', $host_cfg->{'trigger_file'})
+    my $cmd = Failover::Command->new('touch', $host_cfg->{'trigger-file'})
         ->name(sprintf('Promotion trigger file - %s', $host))
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
@@ -362,6 +362,7 @@ sub promotion {
 
     do {
         $cmd->run($failover->dry_run);
+        sleep 3;
     } while ($cmd->status != 0 && time() < $timeout);
 
     return 1 if $cmd->status == 0;
