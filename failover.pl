@@ -190,8 +190,8 @@ sub test_setup {
                 ->verbose($self->verbose)
                 ->name(sprintf('Data Check - %s - Host: %s', $check, $host))
                 ->host($self->config->section($host)->{'host'})
-                ->port($self->config->section($host)->{'pgport'})
-                ->user($self->config->section($host)->{'pguser'})
+                ->port($self->config->section($host)->{'pg-port'})
+                ->user($self->config->section($host)->{'pg-user'})
                 ->database($self->config->section($host)->{'database'})
                 ->compare($self->config->section($check)->{'result'})
                 ->psql->run($self->dry_run);
@@ -232,14 +232,14 @@ sub test_setup {
     }
 
     my %dirchecks = (
-        pgdata   => ['PostgreSQL Data Directory',undef],
-        pgconf   => ['PostgreSQL Configuration','postgresql.conf'],
-        omnipitr => ['OmniPITR Directory',undef],
+        'pg-data'   => ['PostgreSQL Data Directory',undef],
+        'pg-conf'   => ['PostgreSQL Configuration','postgresql.conf'],
+        'omnipitr'  => ['OmniPITR Directory',undef],
     );
 
     # Test various directory locations on all hosts
     foreach my $host (Failover::Utils::sort_section_names($self->config->get_hosts)) {
-        foreach my $dirname (qw( pgdata pgconf omnipitr)) {
+        foreach my $dirname (qw( pg-data pg-conf omnipitr)) {
             my $setting = $self->config->section($host)->{$dirname} || undef;
             Failover::Utils::die_error('Setting %s not defined for Host %s.', $dirname, $host)
                 unless defined $setting;
@@ -481,9 +481,9 @@ sub promotion {
         ->name(sprintf('Verification of %s PostgreSQL in R/W mode', $host))
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
-        ->port($host_cfg->{'pgport'})
+        ->port($host_cfg->{'pg-port'})
         ->database($host_cfg->{'database'})
-        ->user($host_cfg->{'pguser'})
+        ->user($host_cfg->{'pg-user'})
         ->psql;
 
     do {
@@ -954,7 +954,7 @@ sub normalize_host {
 
     $self->normalize_section($host, qw(
         host user interface method timeout
-        pgdata pgconf pguser pgport database pg-restart pg-reload
+        pg-data pg-conf pg-user pg-port database pg-restart pg-reload
         omnipitr trigger-file
     ));
 
@@ -970,7 +970,7 @@ sub normalize_shared {
 
     Failover::Utils::die_error('No shared IP section defined.') unless exists $self->{'config'}{'shared-ip'};
     $self->normalize_section('shared-ip', qw(
-        host port database user pgport pguser
+        host port database user pg-port pg-user
     ));
 }
 
@@ -1014,7 +1014,7 @@ sub validate_setting_name {
 
     return $name if grep { $_ eq $name }
         qw( host port database user interface method trigger-file query result
-            pgdata pgconf pgport pguser pg-restart pg-reload omnipitr path timeout );
+            pg-data pg-conf pg-port pg-user pg-restart pg-reload omnipitr path timeout );
     return;
 }
 
