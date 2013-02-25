@@ -520,29 +520,6 @@ sub cmd_ifupdown {
     return (sprintf('if%s', $direction), $interface);
 }
 
-sub disable_wal {
-    my ($failover, $host) = @_;
-
-    return if check_wal_status($failover, $host) == 0;
-}
-
-sub enable_wal {
-    my ($failover, $host) = @_;
-
-    return if check_wal_status($failover, $host) == 1;
-
-    my @sed_command = qw( sed );
-
-    my $host_cfg = $failover->config->section($host);
-
-    my $cmd = Failover::Command->new(@sed_command)->(sprintf('Enabling WAL archiving - %s', $host))
-        ->verbose($failover->verbose)
-        ->host($host_cfg->{'host'})
-        ->port($host_cfg->{'port'})
-        ->user($host_cfg->{'user'})
-        ->ssh->run($failover->dry_run);
-}
-
 sub check_wal_status {
     my ($failover, $host) = @_;
 
