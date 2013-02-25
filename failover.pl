@@ -468,6 +468,28 @@ sub demotion {
     retry_check($failover, sub { check_postmaster_offline($failover, $host) });
 
     # archive current datadir if non-empty
+    $cmd = Failover::Command->new(qw( du -s ), $host_cfg->{'pg-data'}, qw( | awk '{ print $1 }' ))
+        ->name(sprintf('Verifying empty datadir on %s.', $host))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->compare("0")
+            ->ssh->run($failover->dry_run);
+
+    if ($cmd->status != 0) {
+        $cmd = Failover::Command->new(
+                qw( tar cf ),
+                sprintf('%s.%04d-%02d-%02d.tar', $host_cfg->{'pg-data'}, (localtime())[5] + 1900, (localtime())[4,3]),
+                $host_cfg->{'pg-data'}
+            )
+            ->name(sprintf('Archiving existing datadir on %s.', $host))
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+    }
+
     # restore from latest data backup
     # add recovery.conf
     # start postgresql (by prompting user to do so if there is no pg-start command in the config)
@@ -1148,7 +1170,7 @@ sub normalize_host {
 
     $self->normalize_section($host, qw(
         host user interface method timeout
-        pg-data pg-conf pg-user pg-port database pg-restart pg-reload
+        pg-data pg-conf pg-user pg-port database pg-restart pg-reload pg-start pg-stop
         omnipitr trigger-file
     ));
 
