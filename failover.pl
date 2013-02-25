@@ -454,6 +454,13 @@ sub ip_yield {
 
 sub demotion {
     my ($class, $failover, $host) = @_;
+
+    # check that postmaster is not running (prompt to continue or retest if it is)
+    # archive current datadir if non-empty
+    # restore from latest data backup
+    # add recovery.conf
+    # start postgresql (or prompt user to do so if no pg-start command in configuration)
+    # connect and run test query
 }
 
 sub promotion {
@@ -491,13 +498,15 @@ sub promotion {
         sleep 3;
     } while ($cmd->status != 0 && time() < $timeout);
 
-    return 1 if $cmd->status == 0;
+    if ($cmd->status != 0) {
+        Failover::Utils::print_error("Could not promote PostgreSQL on %s.\n%s", $host, $cmd->stderr);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+    }
 
-    Failover::Utils::print_error("Could not promote PostgreSQL on %s.\n%s", $host, $cmd->stderr);
-    exit(1) if $failover->exit_on_error;
-    Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+    # perform an omnipitr-backup from newly-promoted host
 
-    return 0;
+    return 1;
 }
 
 sub cmd_ifupdown {
@@ -509,6 +518,88 @@ sub cmd_ifupdown {
         unless grep { $_ eq $direction } qw( up down );
 
     return (sprintf('if%s', $direction), $interface);
+}
+
+sub disable_wal {
+    my ($failover, $host) = @_;
+
+    return if check_wal_status($failover, $host) == 0;
+}
+
+sub enable_wal {
+    my ($failover, $host) = @_;
+
+    return if check_wal_status($failover, $host) == 1;
+
+    my @sed_command = qw( sed );
+
+    my $host_cfg = $failover->config->section($host);
+
+    my $cmd = Failover::Command->new(@sed_command)->(sprintf('Enabling WAL archiving - %s', $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+}
+
+sub check_wal_status {
+    my ($failover, $host) = @_;
+
+    my $host_cfg = $failover->config->section($host);
+    my $pgconf_file = $host_cfg->{'pg-conf'} . '/postgresql.conf';
+
+    my $cmd = Failover::Command->new(qw( ls -l ),$pgconf_file)
+        ->name('Locating WAL Archives - ' . $host)
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    if ($cmd->status != 0) {
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation(
+            'Could not determine whether WAL archiving configuration was active. Proceed anyway?'
+            ) if !$failover->skip_confirmation;
+        return -1;
+    }
+
+    return -1 unless $cmd->stdout =~ m{^(\w).+->\s+([^>]+)\s*$}o;
+    return -1 unless $1 eq 'l'; # configuration was not symlinked to a wal/nowal variant
+}
+
+sub check_postmaster_status {
+    my ($failover, $host) = @_;
+
+    my $host_cfg = $failover->config->section($host);
+    my $data_check = $failover->config->section(($failover->config->get_data_checks)[0]);
+
+    my $cmd = Failover::Command->new($data_check->{'query'})
+        ->name('Postmaster Status Check - Remote - ' . $host)
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->database($host_cfg->{'database'})
+        ->port($host_cfg->{'pg-port'})
+        ->user($host_cfg->{'pg-user'})
+        ->psql->run($failover->dry_run);
+
+    # No need to check process table if we were able to connect to postgres on the host
+    return 1 if $cmd->status == 0;
+
+    $cmd = Failover::Command->new(qw( ps -l -C postgres ))
+        ->name('Postmaster Status Check - Local Process - ' . $host)
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    return 1 if $cmd->status == 0;
+
+    # Both remote PSQL and local PS checks for a Postmaster failed and we have to assume
+    # that PostgreSQL is not running on the target system at this time.
+    return -1;
 }
 
 
