@@ -709,6 +709,12 @@ sub check_postmaster_online {
     return -1;
 }
 
+sub latest_base_backup {
+    my ($failover) = @_;
+
+    
+}
+
 
 package Failover::Command;
 
