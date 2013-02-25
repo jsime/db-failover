@@ -458,6 +458,10 @@ sub demotion {
     my $host_cfg = $failover->config->section($host);
     Failover::Utils::die_error('Invalid host %s given for demotion.', $host) unless defined $host_cfg;
 
+    my $check_cfg = $failover->config->section(($failover->config->get_data_checks())[0]);
+    Failover::Utils::die_error('Could not locate a data check in the configuration to test demotion.')
+        unless defined $check_cfg;
+
     my ($cmd);
 
     # check that postmaster is not running (prompt to continue or retest if it is)
@@ -475,11 +479,26 @@ sub demotion {
             ->port($host_cfg->{'port'})
             ->user($host_cfg->{'user'})
             ->ssh->run($failover->dry_run);
+
+        if ($cmd->status != 0) {
+            exit(1) if $failover->exit_on_error;
+            Failover::Utils::print_error("An error was encountered starting PostgreSQL on %s.\n%s",
+                $host, $cmd->stderr);
+            Failover::Utils::prompt_user('Please resolve this issue and start PostgreSQL before proceeding.');
+        }
     } else {
         Failover::Utils::prompt_user(sprintf('Please start PostgreSQL on %s.', $host));
     }
 
     # connect and run test query
+    $cmd = Failover::Command->new($check_cfg->{'query'})
+        ->name(sprintf('Verifying PostgreSQL operating on %s', $host))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->database($host_cfg->{'database'})
+            ->port($host_cfg->{'pg-port'})
+            ->user($host_cfg->{'pg-user'})
+            ->psql->run($failover->dry_run);
 }
 
 sub promotion {
@@ -861,7 +880,7 @@ sub run {
     # override exit status if the current command is expected to fail
     if ($self->{'status'} == 0 && $self->{'expect_error'} == 1) {
         $self->{'status'} = 1;
-    elsif ($self->{'status'} != 0 && $self->{'expect_error'} == 1) {
+    } elsif ($self->{'status'} != 0 && $self->{'expect_error'} == 1) {
         $self->{'status'} = 0;
     }
 
