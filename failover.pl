@@ -456,6 +456,8 @@ sub demotion {
     my ($class, $failover, $host) = @_;
 
     # check that postmaster is not running (prompt to continue or retest if it is)
+    retry_check($failover, sub { check_postmaster_offline($failover, $host) });
+
     # archive current datadir if non-empty
     # restore from latest data backup
     # add recovery.conf
@@ -531,6 +533,20 @@ sub promotion {
     return 1;
 }
 
+sub retry_check {
+    my ($failover, $check_sub, $prompt) = @_;
+
+    my $r;
+
+    while (($r = &$check_sub) != 1) {
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation($prompt || 'Would you like to retry this action?')
+            if !$failover->skip_confirmation;
+    }
+
+    return $r;
+}
+
 sub cmd_ifupdown {
     my ($direction, $interface) = @_;
 
@@ -568,14 +584,48 @@ sub check_wal_status {
     return -1 unless $1 eq 'l'; # configuration was not symlinked to a wal/nowal variant
 }
 
-sub check_postmaster_status {
+sub check_postmaster_offline {
     my ($failover, $host) = @_;
 
     my $host_cfg = $failover->config->section($host);
     my $data_check = $failover->config->section(($failover->config->get_data_checks)[0]);
 
     my $cmd = Failover::Command->new($data_check->{'query'})
-        ->name('Postmaster Status Check - Remote - ' . $host)
+        ->name('Postmaster Offline Status Check - Remote - ' . $host)
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->database($host_cfg->{'database'})
+        ->port($host_cfg->{'pg-port'})
+        ->user($host_cfg->{'pg-user'})
+        ->expect_error(1)
+        ->psql->run($failover->dry_run);
+
+    return 1 if $cmd->status == 0;
+
+    $cmd = Failover::Command->new(qw( ps -l -C postgres ))
+        ->name('Postmaster Offline Status Check - Local Process - ' . $host)
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->expect_error(1)
+        ->ssh->run($failover->dry_run);
+
+    return 1 if $cmd->status == 0;
+
+    # Both remote PSQL and local PS checks for a Postmaster failed and we have to assume
+    # that PostgreSQL is not running on the target system at this time.
+    return -1;
+}
+
+sub check_postmaster_online {
+    my ($failover, $host) = @_;
+
+    my $host_cfg = $failover->config->section($host);
+    my $data_check = $failover->config->section(($failover->config->get_data_checks)[0]);
+
+    my $cmd = Failover::Command->new($data_check->{'query'})
+        ->name('Postmaster Online Status Check - Remote - ' . $host)
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
         ->database($host_cfg->{'database'})
@@ -587,7 +637,7 @@ sub check_postmaster_status {
     return 1 if $cmd->status == 0;
 
     $cmd = Failover::Command->new(qw( ps -l -C postgres ))
-        ->name('Postmaster Status Check - Local Process - ' . $host)
+        ->name('Postmaster Online Status Check - Local Process - ' . $host)
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
         ->port($host_cfg->{'port'})
@@ -614,6 +664,7 @@ sub new {
     my ($class, @command) = @_;
 
     my $self = bless {}, $class;
+    $self->{'expect_error'} = 0;
     $self->{'verbose'} = 0;
     $self->{'silent'} = 0;
     $self->{'command'} = [@command] if @command;
@@ -663,6 +714,16 @@ sub database {
 
     $self->{'database'} = defined $database ? $database : '';
     Failover::Utils::log('Command object database set to %s.', $self->{'database'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub expect_error {
+    my ($self, $flag) = @_;
+
+    $self->{'expect_error'} = defined $flag && ($flag == 0 || $flag == 1);
+    Failover::Utils::log('Command object failure expectation set to %s.',
+        $self->{'expect_error'} == 1 ? 'true' : 'false') if $self->{'verbose'} >= 3;;
 
     return $self;
 }
@@ -778,6 +839,13 @@ sub run {
 
     if ($self->{'verbose'} && $self->{'status'} != 0) {
         Failover::Utils::log('Command Object STDERR: %s', $_) for split(/\n/, $self->{'stderr'});
+    }
+
+    # override exit status if the current command is expected to fail
+    if ($self->{'status'} == 0 && $self->{'expect_error'} == 1) {
+        $self->{'status'} = 1;
+    elsif ($self->{'status'} != 0 && $self->{'expect_error'} == 1) {
+        $self->{'status'} = 0;
     }
 
     if ($self->{'status'} == 0) {
