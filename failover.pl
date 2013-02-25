@@ -455,13 +455,30 @@ sub ip_yield {
 sub demotion {
     my ($class, $failover, $host) = @_;
 
+    my $host_cfg = $failover->config->section($host);
+    Failover::Utils::die_error('Invalid host %s given for demotion.', $host) unless defined $host_cfg;
+
+    my ($cmd);
+
     # check that postmaster is not running (prompt to continue or retest if it is)
     retry_check($failover, sub { check_postmaster_offline($failover, $host) });
 
     # archive current datadir if non-empty
     # restore from latest data backup
     # add recovery.conf
-    # start postgresql (or prompt user to do so if no pg-start command in configuration)
+    # start postgresql (by prompting user to do so if there is no pg-start command in the config)
+    if (exists $host_cfg->{'pg-start'}) {
+        $cmd = Failover::Command->new($host_cfg->{'pg-start'})
+            ->name(sprintf('Starting PostgreSQL on %s', $host))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+    } else {
+        Failover::Utils::prompt_user(sprintf('Please start PostgreSQL on %s.', $host));
+    }
+
     # connect and run test query
 }
 
@@ -1172,7 +1189,8 @@ sub validate_setting_name {
 
     return $name if grep { $_ eq $name }
         qw( host port database user interface method trigger-file query result
-            pg-data pg-conf pg-port pg-user pg-restart pg-reload omnipitr path timeout );
+            pg-data pg-conf pg-port pg-user pg-restart pg-reload pg-start pg-stop
+            omnipitr path timeout );
     return;
 }
 
