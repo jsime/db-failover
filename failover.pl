@@ -469,6 +469,9 @@ sub promotion {
     my $host_cfg = $failover->config->section($host);
     Failover::Utils::die_error('Invalid host %s given for promotion.', $host) unless defined $host_cfg;
 
+    my $backup_cfg = $failover->config->section('backup');
+    Failover::Utils::die_error('Could not locate a backup server configuration.') unless defined $backup_cfg;
+
     Failover::Utils::die_error('No OmniPITR trigger file path provided for %s.', $host)
         unless exists $host_cfg->{'trigger-file'};
 
@@ -509,6 +512,21 @@ sub promotion {
     }
 
     # perform an omnipitr-backup from newly-promoted host
+    $cmd = Failover::Command->new('omnipitr-backup-master', '-D', $host_cfg->{'pg-data'},
+            '-dr', sprintf('%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
+            '--log', sprintf('%s/omnipitr-master-backup-^Y-^m-^d.log', $host_cfg->{'omnipitr'}))
+        ->name(sprintf('Creating New Master Backup - %s', $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    if ($cmd->status != 0) {
+        Failover::Utils::print_error("OmniPITR Master Backup failed on %s.\n%s", $host, $cmd->stderr);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+    }
 
     return 1;
 }
