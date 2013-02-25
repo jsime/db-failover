@@ -1247,6 +1247,15 @@ sub get_confirmation {
     get_confirmation($question, $default);
 }
 
+sub prompt_user {
+    my ($question) = @_;
+
+    printf('%s %s[Enter to continue]%s', $question, color('yellow'), color('reset'));
+    my $r = <STDIN>;
+
+    return 1;
+}
+
 sub log {
     my ($fmt, @args) = @_;
 
