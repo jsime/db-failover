@@ -480,8 +480,12 @@ sub promotion {
         ->port($host_cfg->{'port'})
         ->user($host_cfg->{'user'})
         ->ssh->run($failover->dry_run);
-    Failover::Utils::die_error('Failed to create promotion trigger file on %s.', $host)
-        unless $cmd->status == 0;
+
+    if ($cmd->status != 0) {
+        Failover::Utils::print_error("Failed to create promotion trigger file on %s.\n%s", $host, $cmd->stderr);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+    }
 
     my $timeout = time() + ($host_cfg->{'timeout'} || 60);
     $cmd = Failover::Command->new('create temp table failover_check ( i int4 )')
