@@ -572,9 +572,14 @@ sub promotion {
     }
 
     # perform an omnipitr-backup from newly-promoted host
-    $cmd = Failover::Command->new('omnipitr-backup-master', '-D', $host_cfg->{'pg-data'},
-            '-dr', sprintf('%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
-            '--log', sprintf('%s/omnipitr-master-backup-^Y-^m-^d.log', $host_cfg->{'omnipitr'}))
+    $cmd = Failover::Command->new('omnipitr-backup-master',
+            '-D',         $host_cfg->{'pg-data'},
+            '-t',         '/var/tmp/omnipitr/',
+            '-x',         '/var/tmp/omnipitr/dstbackup',
+            '-dr',        sprintf('%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
+            '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d.log', $host_cfg->{'omnipitr'}),
+            '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
+        )
         ->name(sprintf('Creating New Master Backup - %s', $host))
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
