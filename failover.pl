@@ -492,6 +492,16 @@ sub demotion {
 
     # restore from latest data backup
     my %backup = latest_base_backup($failover);
+    my $backup_cfg = $failover->config->section($backup{'host'});
+
+    $cmd = Failover::Command->new('rsync', '-q',
+            sprintf('%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'user'}, $backup{'file'})
+        )
+        ->name(sprintf('Copying latest base backup from host %s.', $backup{'host'}))
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
 
     # add recovery.conf
     # start postgresql (by prompting user to do so if there is no pg-start command in the config)
@@ -578,7 +588,7 @@ sub promotion {
             '-D',         $host_cfg->{'pg-data'},
             '-t',         '/var/tmp/omnipitr/',
             '-x',         '/var/tmp/omnipitr/dstbackup',
-            '-dr',        sprintf('%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
+            '-dr',        sprintf('gzip=%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'host'}, $backup_cfg->{'path'}),
             '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d-^H^M^S.log', $host_cfg->{'omnipitr'}),
             '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
         )
