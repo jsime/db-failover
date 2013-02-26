@@ -736,6 +736,12 @@ sub latest_base_backup {
 
     my %latest = ( ts => '0000-00-00-000000' );
 
+    # Fake a base backup entry for dry-runs
+    if ($failover->dry_run) {
+        $latest{'host'} = ($failover->config->get_backups())[0];
+        $latest{'file'} = '/tmp/dry_run_archive.tar.gz';
+    }
+
     foreach my $host ($failover->config->get_backups) {
         my $host_cfg = $failover->config->section($host);
 
@@ -761,7 +767,7 @@ sub latest_base_backup {
         }
     }
 
-    if (!exists $latest{'file'}) {
+    if (!$failover->dry_run && !exists $latest{'file'}) {
         Failover::Utils::die_error('Could not locate any backup files.');
     }
 
@@ -927,6 +933,7 @@ sub run {
         $self->{'status'} = 0;
         $self->{'stdout'} = '';
         $self->{'stderr'} = '';
+        sleep 1;
         $self->print_ok() unless $self->{'silent'};
         return $self;
     }
