@@ -495,13 +495,25 @@ sub demotion {
     my $backup_cfg = $failover->config->section($backup{'host'});
 
     $cmd = Failover::Command->new('rsync', '-q',
-            sprintf('%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'user'}, $backup{'file'})
+            sprintf('%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'user'}, $backup{'file'}),
+            sprintf('%s/base_restore.tar.gz', $host_cfg->{'omnipitr'})
         )
         ->name(sprintf('Copying latest base backup from host %s.', $backup{'host'}))
         ->host($host_cfg->{'host'})
         ->port($host_cfg->{'port'})
         ->user($host_cfg->{'user'})
         ->ssh->run($failover->dry_run);
+    exit(1) if $failover->exit_on_error && $cmd->status != 0;
+
+    $cmd = Failover::Command->new(qw( tar -x -z -C ), $host_cfg->{'pg-data'},
+            '-f', sprintf('%s/base_restore.tar.gz', $host_cfg->{'omnipitr'})
+        )
+        ->name(sprintf('Restoring base backup to host %s.', $host))
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+    exit(1) if $failover->exit_on_error && $cmd->status != 0;
 
     # add recovery.conf
     # start postgresql (by prompting user to do so if there is no pg-start command in the config)
