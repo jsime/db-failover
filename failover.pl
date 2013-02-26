@@ -23,7 +23,6 @@ sub new {
     GetOptions($self->{'options'},
         # general options
         'config|c=s',
-        'no-demotion!',
         'dry-run|d!',
         'skip-confirmation!',
         'exit-on-error|e!',
@@ -66,10 +65,6 @@ Basic options, common to multiple actions.
                         conditions normally requiring confirmation to
                         continue, instead of prompting.
 
-  --no-demotion         Prevents the current master database from
-                        being demoted to a slave when a new master is
-                        promoted.
-
   --skip-confirmation   Do not wait for confirmation after displaying
                         configuration summary. Proceed directly to
                         specified action.
@@ -86,10 +81,8 @@ will be run in the order shown here when multiple are specified.
                         This can only be specified once, as it involves
                         the specified host taking over the shared IP.
 
-  --demote <host>       Singles out <host> for demotion, in the
-                        event a --promote was run with --no-demotion
-                        previously (leaving you with a false master).
-                        May be specified multiple times.
+  --demote <host>       Singles out <host> for demotion. May be
+                        specified multiple times.
 
 Special Actions, which if specified will cause other actions to be
 ignored.
