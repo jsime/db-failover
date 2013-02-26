@@ -32,6 +32,7 @@ sub new {
         # primary actions
         'promote=s',
         'demote=s@',
+        'backup=s@',
     );
 
     if (exists $self->{'options'}{'help'} && $self->{'options'}{'help'}) {
@@ -84,6 +85,11 @@ will be run in the order shown here when multiple are specified.
   --demote <host>       Singles out <host> for demotion. May be
                         specified multiple times.
 
+  --backup <host>       Performs a master backup (using OmniPITR's
+                        tools) of the specified host. If a promotion
+                        is done, and no --backup given, the promoted
+                        host will be suggested for a backup.
+
 Special Actions, which if specified will cause other actions to be
 ignored.
 
@@ -121,12 +127,23 @@ sub run {
 
     # Run through hosts to be demoted
     Failover::Action->demotion($self, $_) for Failover::Utils::sort_section_names($self->demote);
+
+    # Hosts on which we should (or may) perform omnipitr-backup-master
+    if (scalar($self->backup) > 0) {
+        Failover::Action->backup($self, $_) for Failover::Utils::sort_section_names($self->backup);
+    } elsif (scalar($self->promote) > 0) {
+        Failover::Action->backup($self, $_) for Failover::Utils::sort_section_names($self->promote);
+    }
 }
 
 sub show_config {
     my ($self) = @_;
 
-    $self->config->display( promotions => [$self->promote], demotions => [$self->demote] );
+    $self->config->display(
+        promotions => [$self->promote],
+        demotions  => [$self->demote],
+        backups    => [$self->backup],
+    );
 }
 
 sub test_setup {
@@ -271,6 +288,15 @@ sub promote {
     my ($self) = @_;
 
     return $self->{'options'}{'promote'} if exists $self->{'options'}{'promote'};
+    return;
+}
+
+sub backup {
+    my ($self) = @_;
+
+    return @{$self->{'options'}{'backup'}} if exists $self->{'options'}{'backup'}
+        && ref($self->{'options'}{'backup'}) eq 'ARRAY';
+    return $self->{'options'}{'backup'} if exists $self->{'options'}{'backup'};
     return;
 }
 
@@ -445,6 +471,52 @@ sub ip_yield {
     return 0;
 }
 
+sub backup {
+    my ($class, $failover, $host) = @_;
+
+    my $host_cfg = $failover->config->section($host);
+    Failover::Utils::die_error('Invalid host %s given for backup.', $host) unless defined $host_cfg;
+
+    return unless Failover::Utils::prompt_user(
+        sprintf('Performing a master backup on %s may take a while. Proceed?', $host));
+
+    my @cmd_remotes;
+
+    foreach my $backup_host ($failover->config->get_backups) {
+        my $backup_cfg = $failover->config->section($backup_host);
+        next unless defined $backup_cfg;
+
+        push(@cmd_remotes,
+            '-dr',
+            sprintf('gzip=%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'host'}, $backup_cfg->{'path'})
+        );
+    }
+
+    return unless scalar(@cmd_remotes) > 0;
+
+    my $cmd = Failover::Command->new('omnipitr-backup-master',
+            '-D',         $host_cfg->{'pg-data'},
+            '-t',         '/var/tmp/omnipitr/',
+            '-x',         '/var/tmp/omnipitr/dstbackup',
+            '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d-^H^M^S.log', $host_cfg->{'omnipitr'}),
+            '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
+            @cmd_remotes
+        )
+        ->name(sprintf('Creating New Master Backup - %s', $host))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    if ($cmd->status != 0) {
+        Failover::Utils::print_error("OmniPITR Master Backup failed on %s.\n%s", $host, $cmd->stderr);
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
+    }
+
+}
+
 sub demotion {
     my ($class, $failover, $host) = @_;
 
@@ -584,28 +656,6 @@ sub promotion {
 
     if ($cmd->status != 0) {
         Failover::Utils::print_error("Could not promote PostgreSQL on %s.\n%s", $host, $cmd->stderr);
-        exit(1) if $failover->exit_on_error;
-        Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
-    }
-
-    # perform an omnipitr-backup from newly-promoted host
-    $cmd = Failover::Command->new('omnipitr-backup-master',
-            '-D',         $host_cfg->{'pg-data'},
-            '-t',         '/var/tmp/omnipitr/',
-            '-x',         '/var/tmp/omnipitr/dstbackup',
-            '-dr',        sprintf('gzip=%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'host'}, $backup_cfg->{'path'}),
-            '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d-^H^M^S.log', $host_cfg->{'omnipitr'}),
-            '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
-        )
-        ->name(sprintf('Creating New Master Backup - %s', $host))
-        ->verbose($failover->verbose)
-        ->host($host_cfg->{'host'})
-        ->port($host_cfg->{'port'})
-        ->user($host_cfg->{'user'})
-        ->ssh->run($failover->dry_run);
-
-    if ($cmd->status != 0) {
-        Failover::Utils::print_error("OmniPITR Master Backup failed on %s.\n%s", $host, $cmd->stderr);
         exit(1) if $failover->exit_on_error;
         Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
     }
@@ -1091,12 +1141,16 @@ sub display {
     my @actions;
 
     if (exists $opts{'promotions'} && ref($opts{'promotions'}) eq 'ARRAY' && scalar(@{$opts{'promotions'}}) > 0) {
-        push(@actions, sprintf('%sPromoting:%s %s', color('bold green'), color('reset'),
+        push(@actions, sprintf('%sPromoting:%s   %s', color('bold green'), color('reset'),
             join(', ', Failover::Utils::sort_section_names(@{$opts{'promotions'}}))));
     }
     if (exists $opts{'demotions'} && ref($opts{'demotions'}) eq 'ARRAY' && scalar(@{$opts{'demotions'}}) > 0) {
-        push(@actions, sprintf('%sDemoting:%s  %s', color('bold red'), color('reset'),
+        push(@actions, sprintf('%sDemoting:%s    %s', color('bold red'), color('reset'),
             join(', ', Failover::Utils::sort_section_names(@{$opts{'demotions'}}))));
+    }
+    if (exists $opts{'backups'} && ref($opts{'backups'}) eq 'ARRAY' && scalar(@{$opts{'backups'}}) > 0) {
+        push(@actions, sprintf('%sBacking Up:%s  %s', color('bold yellow'), color('reset'),
+            join(', ', Failover::Utils::sort_section_names(@{$opts{'backups'}}))));
     }
 
     if (scalar(@actions) > 0) {
@@ -1428,12 +1482,12 @@ sub term_width {
     return $ENV{'COLUMNS'} if exists $ENV{'COLUMNS'} && $ENV{'COLUMNS'} =~ m{^\d+$}o;
 
     my $cols = `stty -a`;
-    return $1 if defined $cols && $cols =~ m{columns\s+(\d+)}ois;
+    return ($1 - 2) if defined $cols && $cols =~ m{columns\s+(\d+)}ois;
 
     $cols = `tput cols 2>/dev/null`;
-    return $cols if defined $cols && $cols =~ m{^\d+$}o;
+    return ($cols - 2) if defined $cols && $cols =~ m{^\d+$}o;
 
-    return 80;
+    return 78;
 }
 
 1;
