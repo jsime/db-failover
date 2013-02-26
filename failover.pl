@@ -491,6 +491,8 @@ sub demotion {
     }
 
     # restore from latest data backup
+    my %backup = latest_base_backup($failover);
+
     # add recovery.conf
     # start postgresql (by prompting user to do so if there is no pg-start command in the config)
     if (exists $host_cfg->{'pg-start'}) {
@@ -577,7 +579,7 @@ sub promotion {
             '-t',         '/var/tmp/omnipitr/',
             '-x',         '/var/tmp/omnipitr/dstbackup',
             '-dr',        sprintf('%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
-            '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d.log', $host_cfg->{'omnipitr'}),
+            '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d-^H^M^S.log', $host_cfg->{'omnipitr'}),
             '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
         )
         ->name(sprintf('Creating New Master Backup - %s', $host))
@@ -717,7 +719,38 @@ sub check_postmaster_online {
 sub latest_base_backup {
     my ($failover) = @_;
 
-    
+    my %latest = ( ts => '0000-00-00-000000' );
+
+    foreach my $host ($failover->config->get_backups) {
+        my $host_cfg = $failover->config->section($host);
+
+        my $cmd = Failover::Command->new('ls',$host_cfg->{'path'})
+            ->silent(1)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+
+        next if $cmd->status != 0;
+
+        foreach my $l (split(/\n/, $cmd->stdout)) {
+            $l =~ s{(^\s+|\s+$)}{}ogs;
+            next if $l !~ m|-data-(\d{4}-\d\d-\d\d-\d{6})\.tar\.gz|;
+
+            if (!exists $latest{'file'} || $1 gt $latest{'ts'}) {
+                %latest = ( 'host' => $host,
+                            'ts'   => $1,
+                            'file' => $host_cfg->{'path'} . '/' . $l
+                );
+            }
+        }
+    }
+
+    if (!exists $latest{'file'}) {
+        Failover::Utils::die_error('Could not locate any backup files.');
+    }
+
+    return %latest;
 }
 
 
