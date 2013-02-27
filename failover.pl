@@ -400,6 +400,7 @@ sub ip_takeover {
         ->host($host_cfg->{'host'})
         ->port($host_cfg->{'port'})
         ->user($host_cfg->{'user'})
+        ->sudo(1)
         ->ssh->run($failover->dry_run);
 
     return 1 if $cmd->status == 0;
@@ -461,6 +462,7 @@ sub ip_yield {
         ->host($host_cfg->{'host'})
         ->port($host_cfg->{'port'})
         ->user($host_cfg->{'user'})
+        ->sudo(1)
         ->ssh->run($failover->dry_run);
 
     return 1 if $cmd->status == 0;
@@ -589,6 +591,7 @@ sub demotion {
             ->host($host_cfg->{'host'})
             ->port($host_cfg->{'port'})
             ->user($host_cfg->{'user'})
+            ->sudo(1)
             ->ssh->run($failover->dry_run);
 
         if ($cmd->status != 0) {
