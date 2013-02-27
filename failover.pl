@@ -836,6 +836,7 @@ use warnings;
 
 use File::Temp qw( tempfile );
 use Term::ANSIColor;
+use Time::HiRes qw( gettimeofday tv_interval );
 
 sub new {
     my ($class, @command) = @_;
@@ -991,6 +992,7 @@ sub run {
 
     Failover::Utils::log('Received run request for command object: %s', join(' ', @{$self->{'command'}}))
         if $self->{'verbose'} >= 2;
+    my $time_start = [gettimeofday];
     $self->print_running($self->{'name'} || join(' ', @{$self->{'command'}}));
 
     if ($dryrun) {
@@ -998,7 +1000,7 @@ sub run {
         $self->{'stdout'} = '';
         $self->{'stderr'} = '';
         sleep 1;
-        $self->print_ok() unless $self->{'silent'};
+        $self->print_ok($time_start) unless $self->{'silent'};
         return $self;
     }
 
@@ -1042,7 +1044,7 @@ sub run {
                 $self->{'stdout'}, $self->{'comparison'}) unless $self->{'silent'};
             $self->{'status'} = 1; # fake an error status to make sure caller reacts properly
         } else {
-            $self->print_ok() unless $self->{'silent'};
+            $self->print_ok($time_start) unless $self->{'silent'};
         }
     } else {
         if ($self->{'child_error'} == -1) {
@@ -1091,8 +1093,23 @@ sub print_fail {
 }
 
 sub print_ok {
-    my ($self) = @_;
-    printf("  [%sOK%s]\n", color('bold green'), color('reset')) unless $self->{'silent'};
+    my ($self, $time_start) = @_;
+
+    my $timing = '';
+
+    if (defined $time_start) {
+        my $time_end = [gettimeofday];
+
+        my $diff = tv_interval($time_start, $time_end);
+
+        my $h = int($diff / 3600);
+        my $m = int(($diff - $h * 3600) / 60);
+        my $s = $diff - $h * 3600 - $m * 60;
+
+        $timing = sprintf('%02d:%02d:%04.1f', $h, $m, $s);
+    }
+
+    printf("%10s [%sOK%s]\n", $timing, color('bold green'), color('reset')) unless $self->{'silent'};
     return 1;
 }
 
@@ -1101,7 +1118,7 @@ sub print_running {
 
     my $width = Failover::Utils::term_width() || 80;
     $width = 120 if $width > 120;
-    $width -= 16;
+    $width -= 26;
 
     printf("  Running: %s%-${width}s%s",
         color('yellow'),
