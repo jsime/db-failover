@@ -494,7 +494,7 @@ sub backup {
 
     return unless scalar(@cmd_remotes) > 0;
 
-    my $cmd = Failover::Command->new('omnipitr-backup-master',
+    my $cmd = Failover::Command->new('/opt/omnipitr/bin/omnipitr-backup-master',
             '-D',         $host_cfg->{'pg-data'},
             '-t',         '/var/tmp/omnipitr/',
             '-x',         '/var/tmp/omnipitr/dstbackup',
@@ -840,6 +840,7 @@ sub new {
     $self->{'expect_error'} = 0;
     $self->{'verbose'} = 0;
     $self->{'silent'} = 0;
+    $self->{'sudo'} = 0;
     $self->{'command'} = [@command] if @command;
     Failover::Utils::die_error('Empty command list provided.') if !exists $self->{'command'};
 
@@ -878,6 +879,15 @@ sub user {
 
     $self->{'user'} = defined $username ? $username : '';
     Failover::Utils::log('Command object user set to %s.', $self->{'user'}) if $self->{'verbose'} >= 3;
+
+    return $self;
+}
+
+sub sudo {
+    my ($self, $sudo) = @_;
+
+    $self->{'sudo'} = defined $sudo && ($sudo == 0 || $sudo == 1);
+    Failover::Utils::Log('Command object remote sudo usage set to %s.', $self->{'sudo'} ? 'on' : 'off');
 
     return $self;
 }
@@ -964,7 +974,7 @@ sub ssh {
         ? $self->{'user'} . '@' . $self->{'host'}
         : $self->{'host'}
     );
-    push(@ssh_cmd, 'sudo') if $self->{'user'} ne 'root';
+    push(@ssh_cmd, 'sudo') if $self->{'sudo'} && (!exists $self->{'user'} || $self->{'user'} ne 'root');
     push(@ssh_cmd, map { quotemeta } @{$self->{'command'}}) if exists $self->{'command'} && @{$self->{'command'}};
 
     $self->{'command'} = \@ssh_cmd;
