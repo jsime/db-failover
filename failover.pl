@@ -278,26 +278,38 @@ sub config {
 sub demote {
     my ($self) = @_;
 
-    return @{$self->{'options'}{'demote'}} if exists $self->{'options'}{'demote'}
+    my @hosts;
+
+    @hosts = ($self->{'options'}{'demote'}) if exists $self->{'options'}{'demote'};
+    @hosts = @{$self->{'options'}{'demote'}} if exists $self->{'options'}{'demote'}
         && ref($self->{'options'}{'demote'}) eq 'ARRAY';
-    return $self->{'options'}{'demote'} if exists $self->{'options'}{'demote'};
-    return;
+
+    return unless scalar(@hosts) > 0;
+    return map { $_ =~ m{^host} ? $_ : "host-$_" } @hosts;
 }
 
 sub promote {
     my ($self) = @_;
 
-    return $self->{'options'}{'promote'} if exists $self->{'options'}{'promote'};
-    return;
+    my @hosts;
+
+    @hosts = ($self->{'options'}{'promote'}) if exists $self->{'options'}{'promote'};
+
+    return unless scalar(@hosts) > 0;
+    return map { $_ =~ m{^host} ? $_ : "host-$_" } @hosts;
 }
 
 sub backup {
     my ($self) = @_;
 
-    return @{$self->{'options'}{'backup'}} if exists $self->{'options'}{'backup'}
+    my @hosts;
+
+    @hosts = ($self->{'options'}{'backup'}) if exists $self->{'options'}{'backup'};
+    @hosts = @{$self->{'options'}{'backup'}} if exists $self->{'options'}{'backup'}
         && ref($self->{'options'}{'backup'}) eq 'ARRAY';
-    return $self->{'options'}{'backup'} if exists $self->{'options'}{'backup'};
-    return;
+
+    return unless scalar(@hosts) > 0;
+    return map { $_ =~ m{^host} ? $_ : "host-$_" } @hosts;
 }
 
 sub dry_run {
