@@ -490,7 +490,7 @@ sub backup {
 
         push(@cmd_remotes,
             '-dr',
-            sprintf('gzip=%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'host'}, $backup_cfg->{'path'})
+            sprintf('gzip=%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'})
         );
     }
 
