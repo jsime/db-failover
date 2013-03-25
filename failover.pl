@@ -529,7 +529,6 @@ sub backup {
         exit(1) if $failover->exit_on_error;
         Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
     }
-
 }
 
 sub demotion {
@@ -548,14 +547,14 @@ sub demotion {
     retry_check($failover, sub { check_postmaster_offline($failover, $host) });
 
     # archive current datadir if non-empty
-    $cmd = Failover::Command->new(qw( du -s ), $host_cfg->{'pg-data'}, qw( | awk '{ print $1 }' ))
+    $cmd = Failover::Command->new(qw( du -s ), $host_cfg->{'pg-data'}, qw( | awk ), "'{ print \$1 }'" ))
         ->name(sprintf('Verifying empty datadir on %s.', $host))
-            ->verbose($failover->verbose)
-            ->host($host_cfg->{'host'})
-            ->port($host_cfg->{'port'})
-            ->user($host_cfg->{'user'})
-            ->compare("0")
-            ->ssh->run($failover->dry_run);
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->compare("0")
+        ->ssh->run($failover->dry_run);
 
     if ($cmd->status != 0) {
         $cmd = Failover::Command->new(
@@ -608,13 +607,13 @@ sub demotion {
             ->ssh->run($failover->dry_run);
 
         if ($cmd->status != 0) {
-            exit(1) if $failover->exit_on_error;
             Failover::Utils::print_error("An error was encountered starting PostgreSQL on %s.\n%s",
                 $host, $cmd->stderr);
+            exit(1) if $failover->exit_on_error;
             Failover::Utils::prompt_user('Please resolve this issue and start PostgreSQL before proceeding.');
         }
     } else {
-        Failover::Utils::prompt_user(sprintf('Please start PostgreSQL on %s.', $host));
+        Failover::Utils::prompt_user(sprintf('Please verify the recovery.conf file and start PostgreSQL on %s.', $host));
     }
 
     # connect and run test query
@@ -626,6 +625,7 @@ sub demotion {
             ->port($host_cfg->{'pg-port'})
             ->user($host_cfg->{'pg-user'})
             ->psql->run($failover->dry_run);
+    exit(1) if $failover->exit_on_error && $cmd->status != 0;
 }
 
 sub promotion {
