@@ -6,12 +6,385 @@ exit;
 
 package Failover;
 
+=head1 NAME
+
+failover.pl - script to automate PostgreSQL failover.
+
+=head1 SYNOPSIS
+
+This script is designed to assist with OmniPITR-enabled PostgreSQL cluster failover. Given a
+configuration which defines your hosts and PostgreSQL configurations, it is possible to
+automate much of the process of IP takeover, promotion of replicating clusters to full
+read-write mode, initiation of master backups that can be used to stand up a new replicating
+host, and test various aspects of your environment.
+
+Once configured, operation is fairly straightforward. You simply specify which hosts to
+promote to read-write, which to remote to replication, and which you want to take full
+backups of.
+
+    failover.pl --promote host1 --demote host2 --demote host3 --backup host1
+
+=head1 ACTIONS
+
+Command line arguments to failover.pl are broken down into two groups: Actions and Options.
+Actions determine what (and to which systems) failover.pl will do. Options determine how
+those actions will be done and what kind of prompting or failure handling will be
+performed.
+
+The actions are detailed below. If more than one action is provided for a single
+invocation of failover.pl, they will be performed in the order shown here, so that you
+may safely promote, demote, and backup in a single with minimal to no downtime (actual
+downtime will depend on the speed of the IP takeover, and your applications' ability
+to reestablish connections to the database cluster).
+
+=over 4
+
+=item * Promotion
+
+    failover.pl --promote <host>
+
+Promoting a host will turn off replication, placing the specified host back into master
+read-write operation, perform an IP takeover on the host. Once completed, the host will be
+a fully functioning master database. Currently, only one host may be promoted in a single
+run.
+
+=item * Demotion
+
+    failover.pl --demote <host>
+
+Demoting will result in the specified host switching to recovery mode, replicating from
+the configured master (and falling back on the configured WAL archive segments), as per
+standard OmniPITR procedures. Multiple hosts may be demoted in a single run. Additionally,
+your current master database may be demoted, without specifying a new host to take over,
+but this is not recommended (for reasons which should be obvious).
+
+=item * Backup
+
+    failover.pl --backup <host>
+
+Issuing the backup action for a host will cause a new full database backup to be
+performed, using the omnipitr-master-backup program. This operation can potentially
+take quite some time, depending on the size of your database cluster. The backup
+produced will be suitable for standing up a new replicant.
+
+=item * Test
+
+    failover.pl --test
+
+A special short-circuiting action which will preclude the use of any other actions (backup,
+demote, and promote). This action causes failover.pl to test its entire configuration, as
+well as connectivity to remote hosts. Connections over SSH and C<psql> will be made to
+every host in the configuration (as appropriate) to verify their status. Hosts will be
+checked for OmniPITR installations and PostgreSQL clusters. No modifications to any
+systems will be made.
+
+=back
+
+=head1 OPTIONS
+
+The following options modify the behavior of multiple actions, or overall script
+behavior.
+
+=over 4
+
+=item * --config <file> | -c <file>
+
+Specifies a configuration file to be used. This file, detailed in the L<CONFIGURATION>
+section later, defines all hosts, IP addresses, backup targets, and global settings. By
+defaults, failover.pl will use the first of the following files that exists and is readable:
+
+    $scriptdir/failover.ini
+    ~/failover.ini
+    /etc/db-failover/failover.ini
+
+=item * --dry-run | -d
+
+Indicates that all steps of given actions should be processed, but no changes should
+be made to any systems or database clusters. SSH connections will be made to remote hosts,
+but all steps requiring modifications will simulate successful operations.
+
+=item * --exit-on-error | -e
+
+Will cause failover.pl to immediately exit upon any error condition. Default behavior is
+to prompt the operator on whether to proceed, despite the error. This will preclude that
+ability and any requested actions will need to be performed from scratch after addressing
+whatever caused the reported error.
+
+=item * --skip-confirmation | -s
+
+This option will have failover.pl assume "Yes" to all prompts normally displayed to the
+operator. This includes prompts which may be indicating an error occured (assuming you
+have not also used --exit-on-error).
+
+=item * --verbose | -v
+
+May be used multiple times to increase the amount of output produced by failover.pl
+
+=item * --help | -h
+
+Displays the built-in help messages and terminates the script (even if actions are
+given on the command line).
+
+=back
+
+=head1 CONFIGURATION
+
+Configuration of failover.pl is done via a single INI file. This file should contain
+details to connect to every host in the replication set, where to find certain programs
+involved in failover management, queries that can be run to verify database connectivity,
+shared IP addresses, and backup destinations.
+
+=head2 Sections
+
+The configuration file is broken down into multiple sections.
+
+=over 4
+
+=item * [common]
+
+The [common] section can
+be used to define a setting once for all other sections (or at least those that use the
+particular setting). Any settings in the [common] section can be overridden in any of
+the host-specific sections. Thus, if all of your PostgreSQL hosts listen on port 5432,
+except for host-snowflake, you can define C<pg-port> in [common] as 5432, and C<pg-port>
+in [host-snowflake] as 9876.
+
+=item * [shared-ip]
+
+Valid settings: C<host>
+
+Defines the address (name or IP) used by the currently-active master database cluster.
+Checks which require verification of database connectivity will use the host when
+running the psql command.
+
+=item * [host-XYZ]
+
+Valid settings: C<host>, C<database>, C<user>, C<pg-data>, C<pg-conf>, C<pg-restart>,
+C<pg-reload>, C<pg-start>, C<pg-stop>, C<pg-user>, C<pg-port>, C<omnipitr>, C<interface>,
+C<method>, C<trigger-file>, C<timeout>
+
+Each [host-*] section defines a member of the potential PostgreSQL replication set. The
+section may be repeated any number of times, where the XYZ above is replaced by the name
+you would like to use to refer to the host. It may be any arbitrary string composed of
+the character class [a-z0-9_-]. The names must be unique.
+
+=item * [backup-XYZ]
+
+Valid settings: C<host>, C<user>, C<path>
+
+Defines a host which is used as a backup target. Settings used to run omnipitr-master-backup
+to produce full-backups using rsync-over-ssh, as well as configure a -dr target for
+omnipitr-archive for ongoing WAL archiving.
+
+Backup target section naming follows the same rules as host sections.
+
+=item * [data-check-XYZ]
+
+Valid settings: C<query>, C<result>, C<timeout>
+
+Data checks are queries used to verify connectivity to a database host, and proper operation
+of PostgreSQL (at least to a minimum level of operation). Each data-check requires a query
+to run, and the expected return value against which the query's output will be compared.
+Thus, if you have a data-check which calls a function/procedure in your database, that
+function must be immutable. As such, a data-check with the query "select now()" is unsuitable
+for use with failover.pl, since you cannot include a result setting in the configuration
+which will match that at all times. However, a data-check of
+"select now() > now() - interval '1 day'" and a result setting of "t" would work just fine,
+as a properly-functioning PostgreSQL will always return the boolean "t".
+
+Naming of data-check sections follow the same rules as host sections.
+
+=back
+
+=head2 Settings
+
+The following is a list of every setting name possible, across all configuration sections,
+and what the setting is used for.
+
+=over 4
+
+=item * database
+
+Name of the database in a given host's PostgreSQL cluster.
+
+=item * host
+
+Hostname to which connections will be made. Depending on the context, these connections may
+be over SSH, rsync, or using psql to connect to PostgreSQL directly.
+
+=item * interface
+
+Network interface to be used for the shared IP. Must be the full name of the interface as
+required by whatever method defined in the C<method> setting. E.g. On Linux machines
+using a single alias on the first physical interface and using the ifup/ifdown commands,
+your value for this setting would likely be "eth0:0".
+
+=item * method
+
+The method by which network interfaces will be activated and deactivated. Currently, the
+only supported values here at "ifupdown" and "none" (the latter of which will perform a
+no-op on IP takeover actions).
+
+=item * omnipitr
+
+The base path of the host's OmniPITR installation.
+
+=item * path
+
+Used for backup hosts, this is the path to which the master backup will be performed,
+and the base directory used for WAL segment archiving.
+
+=item * pg-conf
+
+The full path of each host's postgresql.conf configuration file.
+
+=item * pg-data
+
+The base PGDATA path for each host.
+
+=item * pg-port
+
+The port on which PostgreSQL listens.
+
+=item * pg-reload
+
+Full system command necessary to send a -HUP signal to the running PostgreSQL postmaster
+process.
+
+=item * pg-restart
+
+Full system command necessary to restart PostgreSQL.
+
+=item * pg-start
+
+Full system command necessary to cold start PostgreSQL.
+
+=item * pg-stop
+
+Full system command necessary to halt PostgreSQL.
+
+=item * pg-user
+
+Database username used to connect to a given host's PostgreSQL cluster.
+
+=item * query
+
+The SQL query issued to PostgreSQL hosts to verify proper database operation. Must
+result in a consistent value. That value may be any string. It does not have to be
+a single boolean value, though those are simplest to match against.
+
+=item * result
+
+The exact result expected from a data-check query, as defined by the C<query>
+setting, and as formatted by psql (booleans become "t" or "f" and so on). Be careful
+to ensure that you match any psqlrc settings you may have configured for the user
+under which failover.pl is run (e.g. a local .psqlrc may define NULLs to appear as
+some arbitrary string, say "NULLNULLNULL", and if your data-check query is intended
+to return a NULL, that custom string is what you must match against).
+
+=item * timeout
+
+Timeout in seconds which will be used for various commands (connecting via SSH,
+runing data-check queries, etc.).
+
+=item * trigger-file
+
+The full path to the trigger-file on a PostgreSQL host used to switch omnipitr-restore
+from replication to master read-write mode.
+
+=item * user
+
+Username used to connect to hosts via SSH.
+
+=back
+
+=head1 SAMPLE CONFIGURATION
+
+What follows is a fairly minimal configuration that defines three database servers, one
+backup server, a shared IP intended to point to the current master database, and two
+data-checks. Most of the options are the same across hosts, which allows them to occupy
+space only in the common section.
+
+    [common]
+    database = foobar
+    pg-port = 5432
+    pg-user = baz
+    user = postgres
+    interface = eth0:1
+    method = ifupdown
+
+    [shared-ip]
+    host = db.internal.company.com
+
+    [host-db1]
+    host = db1.internal.company.com
+
+    [host-db2]
+    host = db2.internal.company.com
+
+    [host-db3]
+    host = db3.internal.company.com
+    interface = eth1
+
+    [backup]
+    user = backups
+    host = backup.internal.company.com
+    path = /backups/database/foobar
+
+    [data-check-interval]
+    query = select now() > now() - interval '1 hour'
+    result = t
+
+    [data-check-numbers]
+    query = select count(num) from generate_series(1,100,10) gs(num)
+    result = 10
+
+=head1 INTERNALS
+
+The following sections are intended for developers working on failover.pl itself and
+are not particularly relevant for end-users of the program.
+
+=head2 Basic Structure
+
+The failover.pl internals are subdivided into several packages. The primary package,
+C<Failover>, contains the high-level command line parsing, and action dispatchers.
+
+C<Failover::Config> contains methods relating to locating, reading, and interacting
+with the failover.ini configuration (either the default, located automatically by
+failover.pl, or a configuration file pointed to by the --config command line argument).
+
+C<Failover::Action> contains methods that provide the actual functionality behind
+host promotion, demotion, backup, and testing.
+
+C<Failover::Command> contains methods for constructing, executing, and capturing the
+output of any shell or psql commands that need to be run locally or remotely. Commands
+objects are defined through chained-method invocation.
+
+C<Failover::Utils> contains a number of convenience subroutines. Things like sorting
+hostnames (while handling little details like host-10 coming after host-5), printing
+confirmation prompts, log messages, errors, and so on.
+
+=cut
+
 use Data::Dumper;
 use File::Basename;
 use Getopt::Long;
 
 use strict;
 use warnings;
+
+=head2 Package: Failover
+
+Contains methods to handle command line arguments and running of supported actions.
+
+=cut 
+
+=head3 new
+
+Constructor for the Failover class. Parses command line options and locates the
+configuration file.
+
+=cut
 
 sub new {
     my $class = shift;
@@ -46,6 +419,12 @@ sub new {
 
     return $self;
 }
+
+=head3 usage
+
+Display of program usage information.
+
+=cut
 
 sub usage {
     my ($self) = @_;
@@ -102,6 +481,22 @@ ignored.
 EOU
 }
 
+=head3 run
+
+Performs the requested actions. Short-circuits if running in test mode, otherwise it displays a
+summary of the current configuration, prompts to continue, and then proceeds to run promotions, then
+IP takeovers, then demotions, then backups. This order is done to minimize possible downtime.
+
+The new master should already be promoted before it assumes the shared IP. Running the demotion(s)
+after that also allows for the user to terminate the program should they encounter an error or
+self-doubt. Prior to the demotion(s) running, they will still have their original master to fall
+back on to (assuming the failover is being done as a planned event, that is).
+
+Backup is performed last because, depending on the size of the database(s) being backed up, this
+operation may take a significant amount of time.
+
+=cut
+
 sub run {
     my ($self) = @_;
 
@@ -136,6 +531,12 @@ sub run {
     }
 }
 
+=head3 show_config
+
+Wrapper around configuration summary display method from Failover::Config.
+
+=cut
+
 sub show_config {
     my ($self) = @_;
 
@@ -145,6 +546,13 @@ sub show_config {
         backups    => [$self->backup],
     );
 }
+
+=head3 test_setup
+
+Performs a configuration test, verifying that hosts defined in the configuration are all reachable
+and have all the necessary software installed at the specified (or default) locations.
+
+=cut
 
 sub test_setup {
     my ($self) = @_;
@@ -269,11 +677,23 @@ sub test_setup {
     }
 }
 
+=head3 config
+
+Returns the Failover object's reference to the Failover::Config object.
+
+=cut
+
 sub config {
     my ($self) = @_;
     return $self->{'config'} if exists $self->{'config'};
     return;
 }
+
+=head3 demote
+
+Returns the list of hosts marked for demotion, as provided on failover.pl's command line.
+
+=cut
 
 sub demote {
     my ($self) = @_;
@@ -288,6 +708,12 @@ sub demote {
     return map { $_ =~ m{^host} ? $_ : "host-$_" } @hosts;
 }
 
+=head3 promote
+
+Returns the list of hosts marked for promotion, as provided on failover.pl's command line.
+
+=cut
+
 sub promote {
     my ($self) = @_;
 
@@ -298,6 +724,12 @@ sub promote {
     return unless scalar(@hosts) > 0;
     return map { $_ =~ m{^host} ? $_ : "host-$_" } @hosts;
 }
+
+=head3 promote
+
+Returns the list of hosts marked for backup, as provided on failover.pl's command line.
+
+=cut
 
 sub backup {
     my ($self) = @_;
@@ -312,12 +744,27 @@ sub backup {
     return map { $_ =~ m{^host} ? $_ : "host-$_" } @hosts;
 }
 
+=head3 dry_run
+
+Returns a boolean representing whether this is a dry-run, or not. Should it return true,
+no modifications should be made to any systems. Default is false, but can be enabled with
+command line argument --dry-run.
+
+=cut
+
 sub dry_run {
     my ($self) = @_;
 
     return $self->{'options'}{'dry-run'} if exists $self->{'options'}{'dry-run'};
     return 0;
 }
+
+=head3 exit_on_error
+
+Returns a boolean representing whether the program should terminate on error conditions.
+Default is false, but can be true if --exit-on-error was passed on command line.
+
+=cut
 
 sub exit_on_error {
     my ($self) = @_;
@@ -326,6 +773,13 @@ sub exit_on_error {
     return 0;
 }
 
+=head3 skip_confirmation
+
+Returns a boolean representing whether the program should prompt the user to confirm something
+before proceeding. Default is false, but will be true if --skip-confirmation was provided.
+
+=cut
+
 sub skip_confirmation {
     my ($self) = @_;
 
@@ -333,12 +787,26 @@ sub skip_confirmation {
     return 0;
 }
 
+=head3 test
+
+Returns a boolean representing whether the Test action was requested. Default is false, but
+will be true if --test was provided on the command line.
+
+=cut
+
 sub test {
     my ($self) = @_;
 
     return $self->{'options'}{'test'} if exists $self->{'options'}{'test'};
     return 0;
 }
+
+=head3 verbose
+
+Returns an integer value representing the level of verbosity requested. Defaults to 0, but
+can be as high as the number of times --verbose/-v were specified on the command line.
+
+=cut
 
 sub verbose {
     my ($self) = @_;
@@ -352,6 +820,25 @@ package Failover::Action;
 
 use strict;
 use warnings;
+
+=head2 Package: Failover::Action
+
+Methods encapsulating the logic of actions provided by failover.pl. Individual steps taken
+during promotion, demotion, and backup and detailed and managed within this package.
+
+=cut 
+
+=head3 ip_takeover
+
+Class method used to issue commands on a remote server, dependent upon the specific host
+configuration, to activate an appropriate interface for the shared IP. This method will
+attempt to call the C<ip_yield> on all other hosts to ensure that only one machine is
+attempting to lay claim to the shared address at any given time. It is not necessary to
+call the yield method directly, except in circumstances where you may wish to specifically
+disable an interface on a host without also activating the shared address interface
+on another.
+
+=cut
 
 sub ip_takeover {
     my ($class, $failover, $host) = @_;
@@ -423,6 +910,14 @@ sub ip_takeover {
     return 0;
 }
 
+=head3 ip_yield
+
+Method for disabling the interface responsible for listening on the shared address's IP. This
+method is called by C<ip_takeover> automatically and generally does not need to be called
+directly.
+
+=cut
+
 sub ip_yield {
     my ($class, $failover, $host) = @_;
 
@@ -485,6 +980,16 @@ sub ip_yield {
     return 0;
 }
 
+=head3 backup
+
+Action method to issue commands necessary to perform a full master backup on a PostgreSQL
+host server. The time required for this action depends entirely on the size of the database
+cluster, the network speed between it and the backup host, and the write speed of the disks
+on the backup target. The actual backup is performed by OmniPITR; this method is merely a
+wrapper around that program.
+
+=cut
+
 sub backup {
     my ($class, $failover, $host) = @_;
 
@@ -531,6 +1036,20 @@ sub backup {
     }
 }
 
+=head3 demotion
+
+This action issues the commands necessary to demote a read-write database host to a replicant
+state, using OmniPITR. Demoting a host does not, on its own, release the shared IP. Thus, if the
+failover.pl script is run with nothing but a --demote <host> then no changes will be made in where
+the shared address points. Only a --promote will alter network settings on remote hosts.
+
+Issuing a demotion will cause failover.pl to attempt to locate the most recent master backup,
+restore from that, and then enter continuous recovery mode against the configured backup host's
+WAL segments. Under the hood, these replication services are handled by the core PostgreSQL
+configuration and OmniPITR's tools.
+
+=cut
+
 sub demotion {
     my ($class, $failover, $host) = @_;
 
@@ -547,7 +1066,7 @@ sub demotion {
     retry_check($failover, sub { check_postmaster_offline($failover, $host) });
 
     # archive current datadir if non-empty
-    $cmd = Failover::Command->new(qw( du -s ), $host_cfg->{'pg-data'}, qw( | awk ), "'{ print \$1 }'" ))
+    $cmd = Failover::Command->new(qw( du -s ), $host_cfg->{'pg-data'}, qw( | awk ), "'{ print \$1 }'")
         ->name(sprintf('Verifying empty datadir on %s.', $host))
         ->verbose($failover->verbose)
         ->host($host_cfg->{'host'})
@@ -619,14 +1138,24 @@ sub demotion {
     # connect and run test query
     $cmd = Failover::Command->new($check_cfg->{'query'})
         ->name(sprintf('Verifying PostgreSQL operating on %s', $host))
-            ->verbose($failover->verbose)
-            ->host($host_cfg->{'host'})
-            ->database($host_cfg->{'database'})
-            ->port($host_cfg->{'pg-port'})
-            ->user($host_cfg->{'pg-user'})
-            ->psql->run($failover->dry_run);
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->database($host_cfg->{'database'})
+        ->port($host_cfg->{'pg-port'})
+        ->user($host_cfg->{'pg-user'})
+        ->psql->run($failover->dry_run);
     exit(1) if $failover->exit_on_error && $cmd->status != 0;
 }
+
+=head3 promotion
+
+The promotion action creates the trigger file on a remote host to indicate to OmniPITR and
+PostgreSQL that they should exit recovery mode and enter full read-write operation. It will
+then repeatedly check (until the timeout expires) that it is able to perform a modifying DML
+statement against the host's database (creation of a temp table called failover_check)
+before reporting a successful promotion.
+
+=cut
 
 sub promotion {
     my ($class, $failover, $host) = @_;
@@ -679,6 +1208,13 @@ sub promotion {
     return 1;
 }
 
+=head3 retry_check
+
+Wrapper function to issue a command, and on failure prompt the user as to whether to immediately
+attempt the same again, or terminate operation.
+
+=cut
+
 sub retry_check {
     my ($failover, $check_sub, $prompt) = @_;
 
@@ -693,6 +1229,13 @@ sub retry_check {
     return $r;
 }
 
+=head3 cmd_ifupdown
+
+Returns a formatted interface activation/deactivation command to be issued on a remote
+host. Used during IP takeovers and yields.
+
+=cut
+
 sub cmd_ifupdown {
     my ($direction, $interface) = @_;
 
@@ -703,6 +1246,12 @@ sub cmd_ifupdown {
 
     return (sprintf('if%s', $direction), $interface);
 }
+
+=head3 check_wal_status
+
+Attempts to locate active WAL archiving  on a remote host.
+
+=cut
 
 sub check_wal_status {
     my ($failover, $host) = @_;
@@ -729,6 +1278,13 @@ sub check_wal_status {
     return -1 unless $cmd->stdout =~ m{^(\w).+->\s+([^>]+)\s*$}o;
     return -1 unless $1 eq 'l'; # configuration was not symlinked to a wal/nowal variant
 }
+
+=head3 check_postmaster_offline
+
+Verifies that PostgreSQL postmaster processes are not running on a remote host. Uses both a
+psql check and remote SSH command.
+
+=cut
 
 sub check_postmaster_offline {
     my ($failover, $host) = @_;
@@ -764,6 +1320,13 @@ sub check_postmaster_offline {
     return -1;
 }
 
+=head3 check_postmaster_online
+
+Reverse of the _offline check. Verifies that a PostgreSQL postmaster is running on the remote
+host and that it can be contacted via psql.
+
+=cut
+
 sub check_postmaster_online {
     my ($failover, $host) = @_;
 
@@ -796,6 +1359,15 @@ sub check_postmaster_online {
     # that PostgreSQL is not running on the target system at this time.
     return -1;
 }
+
+=head3 latest_base_backup
+
+Using the backup target configuration(s) from the failover.ini, this method attempts to
+locate the most recently performed master database backup. Used prior to a demotion so that
+the newly-initiated replication host starts from a clean backup before attempting to
+replay WAL segments.
+
+=cut
 
 sub latest_base_backup {
     my ($failover) = @_;
@@ -850,6 +1422,21 @@ use File::Temp qw( tempfile );
 use Term::ANSIColor;
 use Time::HiRes qw( gettimeofday tv_interval );
 
+=head2 Package: Failover::Command
+
+Methods to create and issue local, remote, and psql commands. Command objects are used
+via chained-method calls. Except where noted, methods all return their own object on
+success, or nothing on error (if they didn't die first).
+
+=cut 
+
+=head3 new
+
+Constructor for Failover::Command objects. Accepts a list to be passed into a system()
+call.
+
+=cut
+
 sub new {
     my ($class, @command) = @_;
 
@@ -864,6 +1451,13 @@ sub new {
     return $self;
 }
 
+=head3 name
+
+Allows a human-readable description/name for the command to be included in any logging or
+error output. Any printable string may be supplied.
+
+=cut
+
 sub name {
     my ($self, $name) = @_;
 
@@ -872,6 +1466,14 @@ sub name {
 
     return $self;
 }
+
+=head3 host
+
+Sets the remote hostname to be connected to before running the given command. For SSH commands,
+this is the hostname to which ssh will login. For psql commands, this is the database host
+psql will connect to using -h.
+
+=cut
 
 sub host {
     my ($self, $hostname) = @_;
@@ -882,6 +1484,13 @@ sub host {
     return $self;
 }
 
+=head3 port
+
+Remote port to be used when connecting. Applies to both SSH and psql commands, though it is
+recommended to use an ssh_config(5) for setting ports on remote shell systems.
+
+=cut
+
 sub port {
     my ($self, $port) = @_;
 
@@ -890,6 +1499,13 @@ sub port {
 
     return $self;
 }
+
+=head3 user
+
+Remote user to connect as, for both SSH and psql commands. Either will default to the user
+running failover.pl unless set through this method.
+
+=cut
 
 sub user {
     my ($self, $username) = @_;
@@ -900,6 +1516,15 @@ sub user {
     return $self;
 }
 
+=head3 sudo
+
+Indicates that the remote shell command should be issued through sudo. Ideally, as few commands
+as necessary should make use of sudo, but some will require it (restarting the database, changing
+network interfaces, etc). Please note that there is no facility to provide a password to sudo
+through failover.pl, so the remote user will need to be configured for passwordless sudo.
+
+=cut
+
 sub sudo {
     my ($self, $sudo) = @_;
 
@@ -909,6 +1534,12 @@ sub sudo {
     return $self;
 }
 
+=head3 database
+
+Name of the database against which remote psql commands will be issued.
+
+=cut
+
 sub database {
     my ($self, $database) = @_;
 
@@ -917,6 +1548,14 @@ sub database {
 
     return $self;
 }
+
+=head3 expect_error
+
+By default, all command objects will expect to receive a status code of 0 (indicating success)
+from the commands they run. This will invert that behavior and cause the Failover::Command
+object to return true to its caller when its command has failed.
+
+=cut
 
 sub expect_error {
     my ($self, $flag) = @_;
@@ -928,6 +1567,13 @@ sub expect_error {
     return $self;
 }
 
+=head3 silent
+
+By default, command objects will print output with their name and success/failure. Some
+commands are not necessary or desirable to send output, and this will suppress that.
+
+=cut
+
 sub silent {
     my ($self, $silent) = @_;
 
@@ -938,6 +1584,13 @@ sub silent {
     return $self;
 }
 
+=head3 verbose
+
+Sets the verbosity of the command. Higher levels will eventually result in the the raw
+output of commands being run printed out to the console.
+
+=cut
+
 sub verbose {
     my ($self, $verbosity) = @_;
 
@@ -946,6 +1599,13 @@ sub verbose {
 
     return $self;
 }
+
+=head3 compare
+
+Sets a string to which a command's STDOUT is required to match for it to be considered
+a success.
+
+=cut
 
 sub compare {
     my ($self, $comparison) = @_;
@@ -957,6 +1617,12 @@ sub compare {
 
     return $self;
 }
+
+=head3 psql
+
+Indicates that the command object should issue its command through psql.
+
+=cut
 
 sub psql {
     my ($self) = @_;
@@ -976,6 +1642,12 @@ sub psql {
 
     return $self;
 }
+
+=head3 ssh
+
+Indicates that the command object should issue its command through ssh.
+
+=cut
 
 sub ssh {
     my ($self) = @_;
@@ -998,6 +1670,14 @@ sub ssh {
 
     return $self;
 }
+
+=head3 run
+
+The final method called, once all options for the command have been set. Results in
+the command being issued. STDOUT and STDERR are captured and available for inspection
+later.
+
+=cut
 
 sub run {
     my ($self, $dryrun) = @_;
@@ -1078,11 +1758,25 @@ sub run {
     return $self;
 }
 
+=head3 status
+
+Returns boolean for success or failure of the command. The status returned here is
+not necessarilly the raw status returned by the remote command, as it takes into
+account settings such as expect_failure().
+
+=cut
+
 sub status {
     my ($self) = @_;
     return $self->{'status'} if exists $self->{'status'};
     return;
 }
+
+=head3 stderr
+
+Returns a scalar containing the raw STDERR output from the remote command.
+
+=cut
 
 sub stderr {
     my ($self) = @_;
@@ -1090,11 +1784,23 @@ sub stderr {
     return;
 }
 
+=head3 stdout
+
+Returns a scalar containing the raw STDOUT output from the remote command.
+
+=cut
+
 sub stdout {
     my ($self) = @_;
     return $self->{'stdout'} if exists $self->{'stdout'};
     return;
 }
+
+=head3 print_fail
+
+Prints the [FAIL] status on console output for commands.
+
+=cut
 
 sub print_fail {
     my ($self, $fmt, @args) = @_;
@@ -1103,6 +1809,12 @@ sub print_fail {
     printf("           $fmt\n", map { color('yellow') . $_ . color('reset') } @args) if defined $fmt && $self->{'verbose'};
     return 0;
 }
+
+=head3 print_ok
+
+Prints the [OK] status on console output for commands.
+
+=cut
 
 sub print_ok {
     my ($self, $time_start) = @_;
@@ -1125,6 +1837,12 @@ sub print_ok {
     return 1;
 }
 
+=head3 print_running
+
+Prints the command name on console output for commands.
+
+=cut
+
 sub print_running {
     my ($self, $name) = @_;
 
@@ -1146,6 +1864,18 @@ use Term::ANSIColor;
 use strict;
 use warnings;
 
+=head2 Package: Failover::Config
+
+Manages the location, reading, and interaction with failover.pl's configuration file.
+
+=cut 
+
+=head3 new
+
+Constructor for Failover::Config objects.
+
+=cut
+
 sub new {
     my ($class, $base_dir, $file_path) = @_;
     my $self = bless {}, $class;
@@ -1166,6 +1896,16 @@ sub new {
 
     return $self;
 }
+
+=head3 display
+
+Produces terminal-width output summarizing the configuration as parsed by this package.
+Groups sections together and displays their fully-configured states -- options defined
+in the [common] section in the configuration file will be displayed here with the
+individual hosts, to make it as clear as possible what settings will be used for each
+machine.
+
+=cut
 
 sub display {
     my ($self, %opts) = @_;
@@ -1200,6 +1940,14 @@ sub display {
         print join("\n", @actions) . "\n\n";
     }
 }
+
+=head3 display_multisection_block
+
+Method to work out the nearly-most-efficient layout for displaying several hosts on
+a given terminal size. Keeps everything lined up and packs each host together into
+the minimum width necessary for the largest values to fit.
+
+=cut
 
 sub display_multisection_block {
     my ($self, $cols, $label, @sections) = @_;
@@ -1241,6 +1989,14 @@ sub display_multisection_block {
     print $section_block;
 }
 
+=head3 append_section_summary
+
+Tacks on the lines of a section to the output being sent to the console. Each section may be
+multiple lines, and not all sections have the same lines (or the same number of lines). This
+takes care of that, so the display is as clean and readable as possible.
+
+=cut
+
 sub append_section_summary {
     my ($self, $lines, $host, $width, $label, $rows, $lname, $lkey, $lval) = @_;
 
@@ -1263,6 +2019,13 @@ sub append_section_summary {
         $lines->[$i] .= $line;
     }
 }
+
+=head3 read_config
+
+Reads and parses the INI file into the internal nested hash structure, where each top-level
+key is the section name, and the value is a hashref of setting key-value pairs.
+
+=cut
 
 sub read_config {
     my ($path) = @_;
@@ -1302,6 +2065,13 @@ sub read_config {
     return \%cfg;
 }
 
+=head3 validate
+
+Ensures that all required settings are present, and that no unknown setting names are
+encountered.
+
+=cut
+
 sub validate {
     my ($self) = @_;
 
@@ -1315,6 +2085,13 @@ sub validate {
     return 1;
 }
 
+=head3 normalize_backup
+
+Combines each backup section encountered with the common section, if present, to come
+up with the single, unified backup host configuration.
+
+=cut
+
 sub normalize_backup {
     my ($self) = @_;
 
@@ -1322,11 +2099,25 @@ sub normalize_backup {
     $self->normalize_section('backup', qw( host user path ));
 }
 
+=head3 normalize_checks
+
+Combines each data-check section encountered with the common section, if present, to come
+up with the single, unified data-check configuration.
+
+=cut
+
 sub normalize_checks {
     my ($self, $check) = @_;
 
     $self->normalize_section($check, qw( query result ));
 }
+
+=head3 normalize_host
+
+Combines each host section encountered with the common section, if present, to come
+up with the single, unified host configuration.
+
+=cut
 
 sub normalize_host {
     my ($self, $host) = @_;
@@ -1344,6 +2135,13 @@ sub normalize_host {
     }
 }
 
+=head3 normalize_shared
+
+Combines the shared IP section with the common section, if present, to come
+up with the single, unified shared IP configuration.
+
+=cut
+
 sub normalize_shared {
     my ($self) = @_;
 
@@ -1352,6 +2150,14 @@ sub normalize_shared {
         host port database user pg-port pg-user
     ));
 }
+
+=head3 normalize_section
+
+Called by each of the section-specific normalize_ methods, with a section
+hashref containing all the setting key-values, followed by a list of setting
+names valid for the given section type.
+
+=cut
 
 sub normalize_section {
     my ($self, $section, @settings) = @_;
@@ -1368,6 +2174,12 @@ sub normalize_section {
     return 1;
 }
 
+=head3 clean_value
+
+Trims setting values of whitespace, and quotes (if the quotes are matching at ^ and $).
+
+=cut
+
 sub clean_value {
     my ($value) = @_;
 
@@ -1377,6 +2189,13 @@ sub clean_value {
     return $value;
 }
 
+=head3 validate_section_name
+
+Compares an encountered section name with a whitelist of valid sections (taking
+into account that most sections are <section>-<name>).
+
+=cut
+
 sub validate_section_name {
     my ($name) = @_;
 
@@ -1385,6 +2204,14 @@ sub validate_section_name {
     return 1 if $name =~ m{^data-check(-[a-z0-9-]+)?$}o;
     return 0;
 }
+
+=head3 validate_setting_name
+
+Ensures that an encountered setting is a valid one. Any settings in the configuration
+file which do not match the whitelist will trigger a fatal error, so as to prevent
+potentially harmful/invalid configurations from being used against production systems.
+
+=cut
 
 sub validate_setting_name {
     my ($name) = @_;
@@ -1398,6 +2225,12 @@ sub validate_setting_name {
     return;
 }
 
+=head3 section
+
+Returns the section by name from the parsed and validated configuration.
+
+=cut
+
 sub section {
     my ($self, $section) = @_;
 
@@ -1406,11 +2239,23 @@ sub section {
     return $self->{'config'}{$section};
 }
 
+=head3 get_hosts
+
+Returns the list of host names discovered in the configuration.
+
+=cut
+
 sub get_hosts {
     my ($self) = @_;
 
     return grep { $_ =~ m{^host-}o } keys %{$self->{'config'}};
 }
+
+=head3 get_backups
+
+Returns the list of backup host names discovered in the configuration.
+
+=cut
 
 sub get_backups {
     my ($self) = @_;
@@ -1418,11 +2263,23 @@ sub get_backups {
     return grep { $_ =~ m{^backup}o } keys %{$self->{'config'}};
 }
 
+=head3 get_data_checks
+
+Returns the list of data check names discovered in the configuration.
+
+=cut
+
 sub get_data_checks {
     my ($self) = @_;
 
     return grep { $_ =~ m{^data-check}o } keys %{$self->{'config'}};
 }
+
+=head3 get_shared_ips
+
+Returns the list of shared IP names discovered in the configuration.
+
+=cut
 
 sub get_shared_ips {
     my ($self) = @_;
@@ -1439,10 +2296,30 @@ use warnings;
 use File::Basename;
 use Term::ANSIColor;
 
+=head2 Package: Failover::Utils
+
+Convenience subroutines used elsewhere.
+
+=cut 
+
+=head3 die_error
+
+Issues a call to print_error() with all its arguments and then exits with the return
+code of 255 to indicate a fatal error.
+
+=cut
+
 sub die_error {
     print_error(@_);
     exit(255);
 }
+
+=head3 get_confirmation
+
+Displays a Y/N prompt, with a default response should the user just press Enter, and
+blocks for user input.
+
+=cut
 
 sub get_confirmation {
     my ($question, $default) = @_;
@@ -1469,6 +2346,13 @@ sub get_confirmation {
     get_confirmation($question, $default);
 }
 
+=head3 prompt_user
+
+Displays a no-answer-necessary prompt to the user, suitable for pausing script operation
+until the user indicates they have satisfied some external condition.
+
+=cut
+
 sub prompt_user {
     my ($question) = @_;
 
@@ -1477,6 +2361,14 @@ sub prompt_user {
 
     return 1;
 }
+
+=head3 log
+
+Logs the given message to STDOUT. The first argument is used as a format specifier to
+printf, with all following arguments passed as arguments to that same printf. Timestamps,
+current PID, etc. are all added to the output.
+
+=cut
 
 sub log {
     my ($fmt, @args) = @_;
@@ -1490,6 +2382,12 @@ sub log {
             sprintf($fmt, map { color('yellow') . $_ . color('reset') } @args)
     );
 }
+
+=head3 print_error
+
+Prints an error message to output.
+
+=cut
 
 sub print_error {
     my $error;
@@ -1507,6 +2405,13 @@ sub print_error {
     printf("%sERROR:%s %s\n", color('bold red'), color('reset'), $error);
 }
 
+=head3 sort_section_names
+
+Returns an array of sorted section names, to simplify ensuring that host-10 will be
+sorted after host-4.
+
+=cut
+
 sub sort_section_names {
     my @names = @_;
 
@@ -1520,6 +2425,13 @@ sub sort_section_names {
 
     return map { $maps{$_} } sort keys %maps;
 }
+
+=head3 term_width
+
+Does its best to determine the width of the current terminal, without using non-CORE
+Perl modules. Generally works okay on raw terminals as well as inside screen/tmux.
+
+=cut
 
 sub term_width {
     return $ENV{'COLUMNS'} if exists $ENV{'COLUMNS'} && $ENV{'COLUMNS'} =~ m{^\d+$}o;
