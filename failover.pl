@@ -902,12 +902,18 @@ sub ip_takeover {
         ->sudo(1)
         ->ssh->run($failover->dry_run);
 
-    return 1 if $cmd->status == 0;
+    if ($cmd->status != 0) {
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Interface was not enabled properly. Proceed anyway?')
+            if !$failover->skip_confirmation;
+        return 0;
+    }
 
-    exit(1) if $failover->exit_on_error;
-    Failover::Utils::get_confirmation('Interface was not enabled properly. Proceed anyway?')
-        if !$failover->skip_confirmation;
-    return 0;
+    # update system configuration, if appropriately configured and a supported OS,
+    # to enable this interface on reboot
+    # TODO
+
+    return 1;
 }
 
 =head3 ip_yield
@@ -972,12 +978,19 @@ sub ip_yield {
         ->sudo(1)
         ->ssh->run($failover->dry_run);
 
-    return 1 if $cmd->status == 0;
+    if ($cmd->status != 0) {
+        exit(1) if $failover->exit_on_error;
+        Failover::Utils::get_confirmation('Interface was not shut down properly. Proceed anyway?')
+            if !$failover->skip_confirmation;
+        return 0;
+    }
 
-    exit(1) if $failover->exit_on_error;
-    Failover::Utils::get_confirmation('Interface was not shut down properly. Proceed anyway?')
-        if !$failover->skip_confirmation;
-    return 0;
+    # update system configuration, if appropriately configured and a supported OS,
+    # to prevent this interface from being enabled on reboot (otherwise it will try to
+    # reclaim the shared IP and cause problems)
+    # TODO
+
+    return 1;
 }
 
 =head3 backup
@@ -1113,7 +1126,42 @@ sub demotion {
         ->ssh->run($failover->dry_run);
     exit(1) if $failover->exit_on_error && $cmd->status != 0;
 
-    # add recovery.conf
+    # add recovery.conf from pg-recovery configuration path, if defined, otherwise
+    # prompt user to put the file into place before we proceed with bringing up PG
+    if (exists $host_cfg->{'pg-recovery'}) {
+        if (my $recovery = locate_recovery_conf($failover, $host_cfg)) {
+            if ($recovery->{'remote'}) {
+                $cmd = Failover::Command->new('cp',$recovery->{'path'},sprintf('%s/recovery.conf', $host_cfg->{'pg-data'}))
+                    ->name(sprintf('Transferring recovery.conf to host %s', $host))
+                    ->verbose($failover->verbose)
+                    ->host($host_cfg->{'host'})
+                    ->port($host_cfg->{'port'})
+                    ->user($host_cfg->{'user'})
+                    ->ssh->run($failover->dry_run);
+            } else {
+                $cmd = Failover::Command->new('scp',$recovery->{'path'},
+                        sprintf('%s@%s:%s/recovery.conf', $host_cfg->{'user'}, $host_cfg->{'host'}, $host_cfg->{'pg-data'}))
+                    ->name(sprintf('Transferring recovery.conf to host %s', $host))
+                    ->verbose($failover->verbose)
+                    ->run($failover->dry_run);
+            }
+
+            if ($cmd->status != 0) {
+                Failover::Utils::print_error("Could not place recovery.conf into the data-dir for host %s.\n", $host);
+                exit(1) if $failover->exit_on_error;
+                return 0;
+            }
+        } else {
+            Failover::Utils::print_error("Could not locate the specified recovery.conf file %s for host %s.\n",
+                $host_cfg->{'pg-recovery'}, $host);
+            exit(1) if $failover->exit_on_error;
+            return 0;
+        }
+    } else {
+        Failover::Utils::prompt_user(sprintf('No pg-recovery defined for %s. Place a recovery.conf file in %s on %s before proceeding.',
+            $host, $host_cfg->{'pg-data'}, $host));
+    }
+
     # start postgresql (by prompting user to do so if there is no pg-start command in the config)
     if (exists $host_cfg->{'pg-start'}) {
         $cmd = Failover::Command->new($host_cfg->{'pg-start'})
@@ -1132,7 +1180,7 @@ sub demotion {
             Failover::Utils::prompt_user('Please resolve this issue and start PostgreSQL before proceeding.');
         }
     } else {
-        Failover::Utils::prompt_user(sprintf('Please verify the recovery.conf file and start PostgreSQL on %s.', $host));
+        Failover::Utils::prompt_user(sprintf('No pg-start command defined for %h. Please start PostgreSQL manually.', $host));
     }
 
     # connect and run test query
@@ -1410,6 +1458,31 @@ sub latest_base_backup {
     }
 
     return %latest;
+}
+
+sub locate_recovery_conf {
+    my ($failover, $host_cfg) = @_;
+
+    my $path = $host_cfg->{'pg-recovery'};
+    return { remote => 0, path => $path } if -f $path && -r _;
+
+    $path = $failover->{'base_dir'} . '/' . $host_cfg->{'pg-recovery'};
+    return { remote => 0, path => $path } if -f $path && -r _;
+
+    $path = $failover->{'base_dir'} . '/recovery.conf';
+    return { remote => 0, path => $path } if -f $path && -r _;
+
+    my $cmd = Failover::Command->new('ls',$host_cfg->{'pg-recovery'})
+        ->name(sprintf('Locating PostgreSQL recovery.conf for %s', $host_cfg->{'host'}))
+        ->verbose($failover->verbose)
+        ->host($host_cfg->{'host'})
+        ->port($host_cfg->{'port'})
+        ->user($host_cfg->{'user'})
+        ->ssh->run($failover->dry_run);
+
+    return { remote => 1, path => $host_cfg->{'pg-recovery'} } if $cmd->status == 0;
+
+    return;
 }
 
 
