@@ -920,7 +920,11 @@ sub ip_takeover {
 
     # update system configuration, if appropriately configured and a supported OS,
     # to enable this interface on reboot
-    # TODO
+    if (!interface_activate($host_cfg)) {
+        Failover::Utils::print_error("Unable to mark interface %s as permanently active on %s.\n",
+            $host_cfg->{'interface'}, $host_cfg->{'host'});
+        Failover::Utils::get_confirmation('This is not treated as a fatal error, but you are advised to resolve this to prevent the shared IP from being unreachable should this host reboot while still the primary system.');
+    }
 
     return 1;
 }
@@ -997,7 +1001,11 @@ sub ip_yield {
     # update system configuration, if appropriately configured and a supported OS,
     # to prevent this interface from being enabled on reboot (otherwise it will try to
     # reclaim the shared IP and cause problems)
-    # TODO
+    if (!interface_deactivate($host_cfg)) {
+        Failover::Utils::print_error("Unable to mark interface %s as permanently inactive on %s.\n",
+            $host_cfg->{'interface'}, $host_cfg->{'host'});
+        Failover::Utils::get_confirmation('This is not treated as a fatal error, but you are advised to resolve this to prevent IP conflicts if this host reboots.');
+    }
 
     return 1;
 }
@@ -1469,6 +1477,13 @@ sub latest_base_backup {
     return %latest;
 }
 
+=head3 locate_recovery_conf
+
+Performs a series of checks to locate an appropriate copy of the recovery.conf to be
+used when demoting a PostgreSQL host.
+
+=cut
+
 sub locate_recovery_conf {
     my ($failover, $host_cfg) = @_;
 
@@ -1492,6 +1507,32 @@ sub locate_recovery_conf {
     return { remote => 1, path => $host_cfg->{'pg-recovery'} } if $cmd->status == 0;
 
     return;
+}
+
+=head3 interface_activate
+
+Marks an interface on a host as permanently active (will remain enabled after reboot).
+
+=cut
+
+sub interface_activate {
+    my ($host_cfg) = @_;
+
+    # TODO
+}
+
+=head3 interface_deactivate
+
+Marks an interface on a host as disabled, to prevent it from being initialized upon
+reboot (and potentially causing an IP conflict if that machine is not currently the
+owner of the related virtual IP).
+
+=cut
+
+sub interface_deactivate {
+    my ($host_cfg) = @_;
+
+    # TODO
 }
 
 
