@@ -246,6 +246,14 @@ The base PGDATA path for each host.
 
 The port on which PostgreSQL listens.
 
+=item * pg-recovery
+
+Path (relative to failover.pl base directory, or an absolute path) to the recovery.conf
+file to be used on systems being demoted. The file should be specified in host sections
+(or the common section), and it may be a path on the system from which you are running
+failover.pl (in which case it will be scp'ed to the remote host), or it may be a path
+on the remote host (in which case it will simply be cp'ed).
+
 =item * pg-reload
 
 Full system command necessary to send a -HUP signal to the running PostgreSQL postmaster
@@ -309,6 +317,7 @@ space only in the common section.
     database = foobar
     pg-port = 5432
     pg-user = baz
+    pg-recovery = recovery.conf
     user = postgres
     interface = eth0:1
     method = ifupdown
