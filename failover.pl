@@ -160,8 +160,8 @@ running the psql command.
 =item * [host-XYZ]
 
 Valid settings: C<host>, C<database>, C<user>, C<pg-data>, C<pg-conf>, C<pg-restart>,
-C<pg-reload>, C<pg-start>, C<pg-stop>, C<pg-user>, C<pg-port>, C<omnipitr>, C<interface>,
-C<method>, C<trigger-file>, C<timeout>
+C<pg-recovery>, C<pg-reload>, C<pg-start>, C<pg-stop>, C<pg-user>, C<pg-port>, C<omnipitr>,
+C<interface>, C<method>, C<trigger-file>, C<timeout>
 
 Each [host-*] section defines a member of the potential PostgreSQL replication set. The
 section may be repeated any number of times, where the XYZ above is replaced by the name
@@ -2247,7 +2247,7 @@ sub normalize_host {
 
     $self->normalize_section($host, qw(
         host user interface method timeout
-        pg-data pg-conf pg-user pg-port database pg-restart pg-reload pg-start pg-stop
+        pg-data pg-conf pg-user pg-port database pg-restart pg-reload pg-start pg-stop pg-recovery
         omnipitr trigger-file
     ));
 
@@ -2343,7 +2343,7 @@ sub validate_setting_name {
 
     return $name if grep { $_ eq $name }
         qw( host port database user interface method trigger-file query result
-            pg-data pg-conf pg-port pg-user pg-restart pg-reload pg-start pg-stop
+            pg-data pg-conf pg-port pg-user pg-restart pg-reload pg-start pg-stop pg-recovery
             omnipitr path timeout );
     return;
 }
