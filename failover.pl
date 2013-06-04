@@ -1210,6 +1210,10 @@ sub demotion {
         ->user($host_cfg->{'pg-user'})
         ->psql->run($failover->dry_run);
     exit(1) if $failover->exit_on_error && $cmd->status != 0;
+
+    # demotion complete - prompt user to ensure that virtual IP's interface is not configured
+    # to activate on reboot
+    Failover::Utils::prompt_user(sprintf('Please ensure the virtual IP interface %s on %s *is not* configured to activate on boot.', $host_cfg->{'interface'}, $host));
 }
 
 =head3 promotion
@@ -1269,6 +1273,9 @@ sub promotion {
         exit(1) if $failover->exit_on_error;
         Failover::Utils::get_confirmation('Proceed anyway?') if !$failover->skip_confirmation;
     }
+
+    # promotion complete - remind user to configure virtual IP interface to activate on boot
+    Failover::Utils::prompt_user(sprintf('Please ensure the virtual IP interface %s on %s *is* configured to activate on boot.', $host_cfg->{'interface'}, $host));
 
     return 1;
 }
