@@ -1659,7 +1659,7 @@ sub sudo {
     my ($self, $sudo) = @_;
 
     $self->{'sudo'} = defined $sudo && ($sudo == 0 || $sudo == 1);
-    Failover::Utils::Log('Command object remote sudo usage set to %s.', $self->{'sudo'} ? 'on' : 'off');
+    Failover::Utils::log('Command object remote sudo usage set to %s.', $self->{'sudo'} ? 'on' : 'off');
 
     return $self;
 }
