@@ -2366,7 +2366,7 @@ sub validate_setting_name {
     return $name if grep { $_ eq $name }
         qw( host port database user interface method trigger-file query result
             pg-data pg-conf pg-port pg-user pg-restart pg-reload pg-start pg-stop pg-recovery
-            omnipitr path timeout );
+            omnipitr path timeout tempdir dstbackup );
     return;
 }
 
