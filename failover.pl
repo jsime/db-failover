@@ -1553,8 +1553,6 @@ use Socket;
 use Term::ANSIColor;
 use Time::HiRes qw( gettimeofday tv_interval );
 
-our ($local_host, $local_aliases) = gethostbyaddr('127.0.0.1', AF_INET);
-
 =head2 Package: Failover::Command
 
 Methods to create and issue local, remote, and psql commands. Command objects are used
@@ -1793,7 +1791,10 @@ sub ssh {
 
     # Check to make sure the target host isn't actually the machine we're running on
     # right now before adding all the SSH bits
-    unless (grep { lc($_) eq lc($self->{'host'}) } ($local_host, @{$local_aliases})) {
+    my ($l_host, $l_aliases) = gethostbyaddr(pack('C4',split('\.','127.0.0.1')),2);
+    $l_aliases = [split(m{\s+}o, $l_aliases)];
+
+    unless (grep { lc($_) eq lc($self->{'host'}) } ($l_host, @{$l_aliases})) {
         @ssh_cmd = qw( ssh -q -oBatchMode=yes );
 
         push(@ssh_cmd, '-p', $self->{'port'}) if exists $self->{'port'} && $self->{'port'} =~ m{^\d+$}o;
