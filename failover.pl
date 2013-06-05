@@ -1549,8 +1549,11 @@ use strict;
 use warnings;
 
 use File::Temp qw( tempfile );
+use Socket;
 use Term::ANSIColor;
 use Time::HiRes qw( gettimeofday tv_interval );
+
+our ($local_host, $local_aliases) = gethostbyaddr('127.0.0.1', AF_INET);
 
 =head2 Package: Failover::Command
 
@@ -1786,13 +1789,20 @@ sub ssh {
     Failover::Utils::die_error('Attempt to issue an SSH command without a hostname.')
         unless exists $self->{'host'} && $self->{'host'} =~ m{\w+}o;
 
-    my @ssh_cmd = qw( ssh -q -oBatchMode=yes );
+    my @ssh_cmd;
 
-    push(@ssh_cmd, '-p', $self->{'port'}) if exists $self->{'port'} && $self->{'port'} =~ m{^\d+$}o;
-    push(@ssh_cmd, exists $self->{'user'} && $self->{'user'} =~ m{\w+}o
-        ? $self->{'user'} . '@' . $self->{'host'}
-        : $self->{'host'}
-    );
+    # Check to make sure the target host isn't actually the machine we're running on
+    # right now before adding all the SSH bits
+    unless (grep { lc($_) eq lc($self->{'host'}) } ($local_host, @{$local_aliases})) {
+        @ssh_cmd = qw( ssh -q -oBatchMode=yes );
+
+        push(@ssh_cmd, '-p', $self->{'port'}) if exists $self->{'port'} && $self->{'port'} =~ m{^\d+$}o;
+        push(@ssh_cmd, exists $self->{'user'} && $self->{'user'} =~ m{\w+}o
+            ? $self->{'user'} . '@' . $self->{'host'}
+            : $self->{'host'}
+        );
+    }
+
     push(@ssh_cmd, 'sudo') if $self->{'sudo'} && (!exists $self->{'user'} || $self->{'user'} ne 'root');
     push(@ssh_cmd, map { quotemeta } @{$self->{'command'}}) if exists $self->{'command'} && @{$self->{'command'}};
 
