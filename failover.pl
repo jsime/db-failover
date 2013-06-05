@@ -1045,8 +1045,8 @@ sub backup {
 
     my $cmd = Failover::Command->new('/opt/omnipitr/bin/omnipitr-backup-master',
             '-D',         $host_cfg->{'pg-data'},
-            '-t',         '/var/tmp/omnipitr/',
-            '-x',         '/var/tmp/omnipitr/dstbackup',
+            '-t',         $backup_cfg->{'tempdir'},
+            '-x',         $backup_cfg->{'dstbackup'},
             '-f',         '__HOSTNAME__-__FILETYPE__-^Y-^m-^d-^H^M^S.tar__CEXT__',
             '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d-^H^M^S.log', $host_cfg->{'omnipitr'}),
             '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
@@ -2237,7 +2237,12 @@ sub normalize_backup {
     my ($self) = @_;
 
     Failover::Utils::die_error('No backup server defined.') unless exists $self->{'config'}{'backup'};
-    $self->normalize_section('backup', qw( host user path ));
+    $self->normalize_section('backup', qw( host user path tempdir dstbackup ));
+
+    $self->{'config'}{'backup'}{'tempdir'} = '/tmp' unless exists $self->{'config'}{'backup'}{'tempdir'};
+    $self->{'config'}{'backup'}{'dstbackup'} = $self->{'config'}{'backup'}{'tempdir'} . '/dstbackup'
+        unless exists $self->{'config'}{'backup'}{'dstbackup'};
+    $self->{'config'}{'backup'}{'dstbackup'} =~ s{/+}{/}og;
 }
 
 =head3 normalize_checks
