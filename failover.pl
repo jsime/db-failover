@@ -533,10 +533,8 @@ sub run {
     Failover::Action->demotion($self, $_) for Failover::Utils::sort_section_names($self->demote);
 
     # Hosts on which we should (or may) perform omnipitr-backup-master
-    if (scalar($self->backup) > 0) {
+    if ($self->backup && $self->backup > 0) {
         Failover::Action->backup($self, $_) for Failover::Utils::sort_section_names($self->backup);
-    } elsif (scalar($self->promote) > 0) {
-        Failover::Action->backup($self, $_) for Failover::Utils::sort_section_names($self->promote);
     }
 }
 
@@ -745,7 +743,8 @@ sub backup {
 
     my @hosts;
 
-    @hosts = ($self->{'options'}{'backup'}) if exists $self->{'options'}{'backup'};
+    @hosts = ($self->{'options'}{'backup'}) if exists $self->{'options'}{'backup'}
+        && $self->{'options'}{'backup'} =~ m{\w}o;
     @hosts = @{$self->{'options'}{'backup'}} if exists $self->{'options'}{'backup'}
         && ref($self->{'options'}{'backup'}) eq 'ARRAY';
 
@@ -1659,7 +1658,8 @@ sub sudo {
     my ($self, $sudo) = @_;
 
     $self->{'sudo'} = defined $sudo && ($sudo == 0 || $sudo == 1);
-    Failover::Utils::log('Command object remote sudo usage set to %s.', $self->{'sudo'} ? 'on' : 'off');
+    Failover::Utils::log('Command object remote sudo usage set to %s.', $self->{'sudo'} ? 'on' : 'off')
+        if $self->{'verbose'} >= 3;
 
     return $self;
 }
