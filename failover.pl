@@ -1046,7 +1046,7 @@ sub backup {
     my $cmd = Failover::Command->new('/opt/omnipitr/bin/omnipitr-backup-master',
             '-D',         $host_cfg->{'pg-data'},
             '-U',         $host_cfg->{'pg-user'},
-            '-f',         '__HOSTNAME__-__FILETYPE__-^Y-^m-^d-^H^M^S.tar__CEXT__',
+            '-f',         '__HOSTNAME__-__FILETYPE__-^Y-^m-^d.tar__CEXT__',
             '--log',      sprintf('%s/omnipitr-master-backup-^Y-^m-^d-^H^M^S.log', $host_cfg->{'omnipitr'}),
             '--pid-file', sprintf('%s/backup-master.pid', $host_cfg->{'omnipitr'}),
             @cmd_remotes
