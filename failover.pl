@@ -1792,8 +1792,6 @@ sub ssh {
     my ($self) = @_;
 
     Failover::Utils::log('Marking command object as SSH remote command.') if $self->{'verbose'} >= 3;
-    Failover::Utils::die_error('Attempt to issue an SSH command without a hostname.')
-        unless exists $self->{'host'} && $self->{'host'} =~ m{\w+}o;
 
     my @ssh_cmd;
 
@@ -1802,7 +1800,10 @@ sub ssh {
     my ($l_host, $l_aliases) = gethostbyaddr(pack('C4',split('\.','127.0.0.1')),2);
     $l_aliases = [split(m{\s+}o, $l_aliases)];
 
-    unless (grep { lc($_) eq lc($self->{'host'}) } ($l_host, @{$l_aliases})) {
+    unless (grep { lc($_) eq lc($self->{'host'} || '') } ($l_host, @{$l_aliases})) {
+        Failover::Utils::die_error('Attempt to issue an SSH command without a hostname.')
+            unless exists $self->{'host'} && $self->{'host'} =~ m{\w+}o;
+
         @ssh_cmd = qw( ssh -q -oBatchMode=yes );
 
         push(@ssh_cmd, '-p', $self->{'port'}) if exists $self->{'port'} && $self->{'port'} =~ m{^\d+$}o;
