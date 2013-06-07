@@ -1034,11 +1034,19 @@ sub backup {
         my $backup_cfg = $failover->config->section($backup_host);
         next unless defined $backup_cfg;
 
-        push(@cmd_remotes,
-            '-dr', sprintf('gzip=%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
-            '-t',  $backup_cfg->{'tempdir'},
-            '-x',  $backup_cfg->{'dstbackup'},
-        );
+        if (exists $backup_cfg->{'host'} && $backup_cfg->{'host'} =~ m{\w}o) {
+            push(@cmd_remotes,
+                '-dr', sprintf('gzip=%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
+                '-t',  $backup_cfg->{'tempdir'},
+                '-x',  $backup_cfg->{'dstbackup'},
+            );
+        } else {
+            push(@cmd_remotes,
+                '-dl', $backup_cfg->{'path'},
+                '-t',  $backup_cfg->{'tempdir'},
+                '-x',  $backup_cfg->{'dstbackup'},
+            );
+        }
     }
 
     return unless scalar(@cmd_remotes) > 0;
