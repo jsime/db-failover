@@ -2,370 +2,932 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-<title></title>
+<title>failover.pl - script to automate PostgreSQL failover.</title>
 <meta http-equiv="content-type" content="text/html; charset=utf-8" />
-<link rev="made" href="mailto:depesz@h3po4.home.depesz.com" />
+<link rev="made" href="mailto:root@localhost" />
 </head>
 
 <body style="background-color: white">
 
 
-
-<ul id="index">
-  <li><a href="#NAME">NAME</a></li>
-  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
-  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
-  <li><a href="#How-it-works">How it works</a></li>
-  <li><a href="#Configuration">Configuration</a>
-    <ul>
-      <li><a href="#Environment-variables">Environment variables</a>
-        <ul>
-          <li><a href="#DRY_RUN">DRY_RUN</a></li>
-          <li><a href="#FAILOVER">FAILOVER</a></li>
-          <li><a href="#PATH">PATH</a></li>
-        </ul>
-      </li>
-      <li><a href="#Configuration-file">Configuration file</a>
-        <ul>
-          <li><a href="#Format">Format</a></li>
-          <li><a href="#Sections">Sections</a>
-            <ul>
-              <li><a href="#ip-takeover">ip-takeover</a></li>
-              <li><a href="#db-promotion">db-promotion</a></li>
-              <li><a href="#db-check">db-check</a></li>
-              <li><a href="#data-check--">data-check-*</a></li>
-            </ul>
-          </li>
-        </ul>
-      </li>
-    </ul>
-  </li>
-  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
-</ul>
-
-
-
-<!--
-Source of this documentation is in failover.pod file, do not edit failover.html
-- it should be regenerated, using make, after changes are done to pod file.
--->
-
-<h1 id="NAME">NAME</h1>
-
-<p>failover.pl - tool to simplify failover of PostgreSQL servers</p>
-
-<h1 id="SYNOPSIS">SYNOPSIS</h1>
-
-<p><b>failover.pl</b> <i>config_file</i></p>
-
-<h1 id="DESCRIPTION">DESCRIPTION</h1>
-
-<p>This program can be used to simplify and automate failover procedure for PostgreSQL master-slave clusters.</p>
-
-<p>Typically failover procedure consists of:</p>
+<!-- INDEX BEGIN -->
+<div name="index">
+<p><a name="__index__"></a></p>
 
 <ul>
 
-<li><p>ip takeover</p>
+	<li><a href="#name">NAME</a></li>
+	<li><a href="#synopsis">SYNOPSIS</a></li>
+	<li><a href="#actions">ACTIONS</a></li>
+	<li><a href="#options">OPTIONS</a></li>
+	<li><a href="#configuration">CONFIGURATION</a></li>
+	<ul>
 
-</li>
-<li><p>promoting slave PostgreSQL to standalone/master</p>
+		<li><a href="#sections">Sections</a></li>
+		<li><a href="#settings">Settings</a></li>
+	</ul>
 
-</li>
-<li><p>verifying state of data</p>
+	<li><a href="#sample_configuration">SAMPLE CONFIGURATION</a></li>
+	<li><a href="#internals">INTERNALS</a></li>
+	<ul>
 
-</li>
+		<li><a href="#basic_structure">Basic Structure</a></li>
+		<li><a href="#package__failover">Package: Failover</a></li>
+		<ul>
+
+			<li><a href="#new">new</a></li>
+			<li><a href="#usage">usage</a></li>
+			<li><a href="#run">run</a></li>
+			<li><a href="#show_config">show_config</a></li>
+			<li><a href="#test_setup">test_setup</a></li>
+			<li><a href="#config">config</a></li>
+			<li><a href="#demote">demote</a></li>
+			<li><a href="#promote">promote</a></li>
+			<li><a href="#promote">promote</a></li>
+			<li><a href="#dry_run">dry_run</a></li>
+			<li><a href="#exit_on_error">exit_on_error</a></li>
+			<li><a href="#skip_confirmation">skip_confirmation</a></li>
+			<li><a href="#test">test</a></li>
+			<li><a href="#verbose">verbose</a></li>
+		</ul>
+
+		<li><a href="#package__failover__action">Package: Failover::Action</a></li>
+		<ul>
+
+			<li><a href="#ip_takeover">ip_takeover</a></li>
+			<li><a href="#ip_yield">ip_yield</a></li>
+			<li><a href="#backup">backup</a></li>
+			<li><a href="#demotion">demotion</a></li>
+			<li><a href="#promotion">promotion</a></li>
+			<li><a href="#retry_check">retry_check</a></li>
+			<li><a href="#cmd_ifupdown">cmd_ifupdown</a></li>
+			<li><a href="#check_wal_status">check_wal_status</a></li>
+			<li><a href="#check_postmaster_offline">check_postmaster_offline</a></li>
+			<li><a href="#check_postmaster_online">check_postmaster_online</a></li>
+			<li><a href="#latest_base_backup">latest_base_backup</a></li>
+			<li><a href="#locate_recovery_conf">locate_recovery_conf</a></li>
+			<li><a href="#interface_activate">interface_activate</a></li>
+			<li><a href="#interface_deactivate">interface_deactivate</a></li>
+		</ul>
+
+		<li><a href="#package__failover__command">Package: Failover::Command</a></li>
+		<ul>
+
+			<li><a href="#new">new</a></li>
+			<li><a href="#name">name</a></li>
+			<li><a href="#host">host</a></li>
+			<li><a href="#port">port</a></li>
+			<li><a href="#user">user</a></li>
+			<li><a href="#sudo">sudo</a></li>
+			<li><a href="#database">database</a></li>
+			<li><a href="#expect_error">expect_error</a></li>
+			<li><a href="#silent">silent</a></li>
+			<li><a href="#verbose">verbose</a></li>
+			<li><a href="#compare">compare</a></li>
+			<li><a href="#psql">psql</a></li>
+			<li><a href="#ssh">ssh</a></li>
+			<li><a href="#run">run</a></li>
+			<li><a href="#status">status</a></li>
+			<li><a href="#stderr">stderr</a></li>
+			<li><a href="#stdout">stdout</a></li>
+			<li><a href="#print_fail">print_fail</a></li>
+			<li><a href="#print_ok">print_ok</a></li>
+			<li><a href="#print_running">print_running</a></li>
+		</ul>
+
+		<li><a href="#package__failover__config">Package: Failover::Config</a></li>
+		<ul>
+
+			<li><a href="#new">new</a></li>
+			<li><a href="#display">display</a></li>
+			<li><a href="#display_multisection_block">display_multisection_block</a></li>
+			<li><a href="#append_section_summary">append_section_summary</a></li>
+			<li><a href="#read_config">read_config</a></li>
+			<li><a href="#validate">validate</a></li>
+			<li><a href="#normalize_backup">normalize_backup</a></li>
+			<li><a href="#normalize_checks">normalize_checks</a></li>
+			<li><a href="#normalize_host">normalize_host</a></li>
+			<li><a href="#normalize_shared">normalize_shared</a></li>
+			<li><a href="#normalize_section">normalize_section</a></li>
+			<li><a href="#clean_value">clean_value</a></li>
+			<li><a href="#validate_section_name">validate_section_name</a></li>
+			<li><a href="#validate_setting_name">validate_setting_name</a></li>
+			<li><a href="#section">section</a></li>
+			<li><a href="#get_hosts">get_hosts</a></li>
+			<li><a href="#get_backups">get_backups</a></li>
+			<li><a href="#get_data_checks">get_data_checks</a></li>
+			<li><a href="#get_shared_ips">get_shared_ips</a></li>
+		</ul>
+
+		<li><a href="#package__failover__utils">Package: Failover::Utils</a></li>
+		<ul>
+
+			<li><a href="#die_error">die_error</a></li>
+			<li><a href="#get_confirmation">get_confirmation</a></li>
+			<li><a href="#prompt_user">prompt_user</a></li>
+			<li><a href="#log">log</a></li>
+			<li><a href="#print_error">print_error</a></li>
+			<li><a href="#sort_section_names">sort_section_names</a></li>
+			<li><a href="#term_width">term_width</a></li>
+		</ul>
+
+	</ul>
+
 </ul>
 
-<p>All of these are done, with proper error checking, by this tool.</p>
+<hr name="index" />
+</div>
+<!-- INDEX END -->
 
-<p>Example session can be seen on <a href="http://ascii.io/a/1574">ascii.io site</a>.</p>
-
-<p>Configuration of what failover.pl does happens in two places: environment variables and config file.</p>
-
-<h1 id="How-it-works">How it works</h1>
-
-<p>Work is done in following steps:</p>
-
+<p>
+</p>
+<h1><a name="name">NAME</a></h1>
+<p>failover.pl - script to automate PostgreSQL failover.</p>
+<p>
+</p>
+<hr />
+<h1><a name="synopsis">SYNOPSIS</a></h1>
+<p>This script is designed to assist with OmniPITR-enabled PostgreSQL cluster failover. Given a
+configuration which defines your hosts and PostgreSQL configurations, it is possible to
+automate much of the process of IP takeover, promotion of replicating clusters to full
+read-write mode, initiation of master backups that can be used to stand up a new replicating
+host, and test various aspects of your environment.</p>
+<p>Once configured, operation is fairly straightforward. You simply specify which hosts to
+promote to read-write, which to remote to replication, and which you want to take full
+backups of.</p>
+<pre>
+    failover.pl --promote host1 --demote host2 --demote host3 --backup host1</pre>
+<p>
+</p>
+<hr />
+<h1><a name="actions">ACTIONS</a></h1>
+<p>Command line arguments to failover.pl are broken down into two groups: Actions and Options.
+Actions determine what (and to which systems) failover.pl will do. Options determine how
+those actions will be done and what kind of prompting or failure handling will be
+performed.</p>
+<p>The actions are detailed below. If more than one action is provided for a single
+invocation of failover.pl, they will be performed in the order shown here, so that you
+may safely promote, demote, and backup in a single with minimal to no downtime (actual
+downtime will depend on the speed of the IP takeover, and your applications' ability
+to reestablish connections to the database cluster).</p>
 <ul>
+<li><strong><a name="promotion" class="item">Promotion</a></strong>
 
-<li><p>Display all settings, and request user confirmation</p>
-
+<pre>
+    failover.pl --promote &lt;host&gt;</pre>
+<p>Promoting a host will turn off replication, placing the specified host back into master
+read-write operation, perform an IP takeover on the host. Once completed, the host will be
+a fully functioning master database. Currently, only one host may be promoted in a single
+run.</p>
 </li>
-<li><p>Check if shared IP is pingable (ping is done using TCP connect to port number specified in db-check section)</p>
+<li><strong><a name="demotion" class="item">Demotion</a></strong>
 
+<pre>
+    failover.pl --demote &lt;host&gt;</pre>
+<p>Demoting will result in the specified host switching to recovery mode, replicating from
+the configured master (and falling back on the configured WAL archive segments), as per
+standard OmniPITR procedures. Multiple hosts may be demoted in a single run. Additionally,
+your current master database may be demoted, without specifying a new host to take over,
+but this is not recommended (for reasons which should be obvious).</p>
 </li>
-<li><p>Regardless of whether IP is pingable, try to connect to old server and bring the network interface down</p>
+<li><strong><a name="backup" class="item">Backup</a></strong>
 
+<pre>
+    failover.pl --backup &lt;host&gt;</pre>
+<p>Issuing the backup action for a host will cause a new full database backup to be
+performed, using the omnipitr-master-backup program. This operation can potentially
+take quite some time, depending on the size of your database cluster. The backup
+produced will be suitable for standing up a new replicant.</p>
 </li>
-<li><p>Depending on result of above two jobs:</p>
+<li><strong><a name="test" class="item">Test</a></strong>
 
+<pre>
+    failover.pl --test</pre>
+<p>A special short-circuiting action which will preclude the use of any other actions (backup,
+demote, and promote). This action causes failover.pl to test its entire configuration, as
+well as connectivity to remote hosts. Connections over SSH and <code>psql</code> will be made to
+every host in the configuration (as appropriate) to verify their status. Hosts will be
+checked for OmniPITR installations and PostgreSQL clusters. No modifications to any
+systems will be made.</p>
+</li>
+</ul>
+<p>
+</p>
+<hr />
+<h1><a name="options">OPTIONS</a></h1>
+<p>The following options modify the behavior of multiple actions, or overall script
+behavior.</p>
 <ul>
+<li><strong><a name="config_file_c_file" class="item">--config &lt;file&gt; | -c &lt;file&gt;</a></strong>
 
-<li><p>If neither ping nor bringing the interface down worked - raise warning, but continue.</p>
-
+<p>Specifies a configuration file to be used. This file, detailed in the <em>CONFIGURATION</em>
+section later, defines all hosts, IP addresses, backup targets, and global settings. By
+default, failover.pl will use the first of the following files that exists and is readable:</p>
+<pre>
+    $scriptdir/failover.ini
+    ~/failover.ini
+    /etc/db-failover/failover.ini</pre>
 </li>
-<li><p>If both ping and bringing the interface down worked - continue normally</p>
+<li><strong><a name="dry_run_d" class="item">--dry-run | -d</a></strong>
 
+<p>Indicates that all steps of given actions should be processed, but no changes should
+be made to any systems or database clusters. SSH connections will be made to remote hosts,
+but all steps requiring modifications will simulate successful operations.</p>
 </li>
-<li><p>If pinging didn&#39;t work, but bringing the interface down did - continue normally - PostgreSQL on master might be down.</p>
+<li><strong><a name="exit_on_error_e" class="item">--exit-on-error | -e</a></strong>
 
+<p>Will cause failover.pl to immediately exit upon any error condition. Default behavior is
+to prompt the operator on whether to proceed, despite the error. This will preclude that
+ability and any requested actions will need to be performed from scratch after addressing
+whatever caused the reported error.</p>
 </li>
-<li><p>If pinging did work, but bringing the interface down didn&#39;t - raise error, stop processing.</p>
+<li><strong><a name="skip_confirmation_s" class="item">--skip-confirmation | -s</a></strong>
 
+<p>This option will have failover.pl assume &quot;Yes&quot; to all prompts normally displayed to the
+operator. This includes prompts which may be indicating an error occured (assuming you
+have not also used --exit-on-error).</p>
+</li>
+<li><strong><a name="verbose_v" class="item">--verbose | -v</a></strong>
+
+<p>May be used multiple times to increase the amount of output produced by failover.pl</p>
+</li>
+<li><strong><a name="help_h" class="item">--help | -h</a></strong>
+
+<p>Displays the built-in help messages and terminates the script (even if actions are
+given on the command line).</p>
 </li>
 </ul>
-
-</li>
-<li><p>Check if shared IP is pingable - this is now fatal if it doesn&#39;t work.</p>
-
-</li>
-<li><p>Connect to slave machine, and create promotion trigger file</p>
-
-</li>
-<li><p>In a loop, try to connect to shared IP, using psql, and create temporary table - if it fails, it means that slave didn&#39;t finish recovery yet. After timeout assume it&#39;s error, and stop processing.</p>
-
-</li>
-<li><p>Run user-supplied (in config file) checks to see if data on slave (new master) is correct/sensible.</p>
-
-</li>
-<li><p>Report &quot;All done.&quot;</p>
-
-</li>
-</ul>
-
-<p>Any error with processing is treated as fatal, unless described takeover-ip procedure, and running initial check on database to see if slave finished recovery.</p>
-
-<h1 id="Configuration">Configuration</h1>
-
-<h2 id="Environment-variables">Environment variables</h2>
-
-<h3 id="DRY_RUN">DRY_RUN</h3>
-
-<p>If DRY_RUN variable is set, failover.pl will not run any actual change or ping - it will just print commands that it would run, and assume that they worked OK.</p>
-
-<p>This is useful for seeing what actually happens, and if all the paths as set correctly.</p>
-
-<h3 id="FAILOVER">FAILOVER</h3>
-
-<p>When FAILOVER variable is set to value <code>confirmed</code>, failover.pl will not ask user for confirmation. All output will be the same, just the interaction requirement will be removed.</p>
-
-<p>This is useful for fully-automating the failover, or to make it simpler to run using non-command-line interfaces (like WWW service).</p>
-
-<h3 id="PATH">PATH</h3>
-
-<p>As in any other shell program PATH variable is used to find binaries. failover.pl depends on PATH for finding tools it is using:</p>
-
+<p>
+</p>
+<hr />
+<h1><a name="configuration">CONFIGURATION</a></h1>
+<p>Configuration of failover.pl is done via a single INI file. This file should contain
+details to connect to every host in the replication set, where to find certain programs
+involved in failover management, queries that can be run to verify database connectivity,
+shared IP addresses, and backup destinations.</p>
+<p>
+</p>
+<h2><a name="sections">Sections</a></h2>
+<p>The configuration file is broken down into multiple sections.</p>
 <ul>
+<li><strong><a name="common" class="item">[common]</a></strong>
 
-<li><p>psql</p>
-
+<p>The [common] section can
+be used to define a setting once for all other sections (or at least those that use the
+particular setting). Any settings in the [common] section can be overridden in any of
+the host-specific sections. Thus, if all of your PostgreSQL hosts listen on port 5432,
+except for host-snowflake, you can define <a href="#pg_port"><code>pg-port</code></a> in [common] as 5432, and <a href="#pg_port"><code>pg-port</code></a>
+in [host-snowflake] as 9876.</p>
 </li>
-<li><p>ssh</p>
+<li><strong><a name="shared_ip" class="item">[shared-ip]</a></strong>
 
+<p>Valid settings: <a href="#host"><code>host</code></a></p>
+<p>Defines the address (name or IP) used by the currently-active master database cluster.
+Checks which require verification of database connectivity will use the host when
+running the psql command.</p>
+</li>
+<li><strong><a name="host_xyz" class="item">[host-XYZ]</a></strong>
+
+<p>Valid settings: <a href="#host"><code>host</code></a>, <a href="#database"><code>database</code></a>, <a href="#user"><code>user</code></a>, <a href="#pg_data"><code>pg-data</code></a>, <a href="#pg_conf"><code>pg-conf</code></a>, <a href="#pg_restart"><code>pg-restart</code></a>,
+<a href="#pg_recovery"><code>pg-recovery</code></a>, <a href="#pg_reload"><code>pg-reload</code></a>, <a href="#pg_start"><code>pg-start</code></a>, <a href="#pg_stop"><code>pg-stop</code></a>, <a href="#pg_user"><code>pg-user</code></a>, <a href="#pg_port"><code>pg-port</code></a>, <a href="#omnipitr"><code>omnipitr</code></a>,
+<a href="#interface"><code>interface</code></a>, <a href="#method"><code>method</code></a>, <a href="#trigger_file"><code>trigger-file</code></a>, <a href="#timeout"><code>timeout</code></a></p>
+<p>Each [host-*] section defines a member of the potential PostgreSQL replication set. The
+section may be repeated any number of times, where the XYZ above is replaced by the name
+you would like to use to refer to the host. It may be any arbitrary string composed of
+the character class [a-z0-9_-]. The names must be unique.</p>
+</li>
+<li><strong><a name="backup_xyz" class="item">[backup-XYZ]</a></strong>
+
+<p>Valid settings: <a href="#host"><code>host</code></a>, <a href="#user"><code>user</code></a>, <a href="#path"><code>path</code></a>, <a href="#tempdir"><code>tempdir</code></a>, <a href="#dstbackup"><code>dstbackup</code></a></p>
+<p>Defines a host which is used as a backup target. Settings used to run omnipitr-master-backup
+to produce full-backups using rsync-over-ssh, as well as configure a -dr target for
+omnipitr-archive for ongoing WAL archiving.</p>
+<p>Backup target section naming follows the same rules as host sections.</p>
+<p>If you wish to use a local path as the backup destination (e.g. your backup server already
+exports the target directory over NFS or similar, and thus no scp/rsync is needed), then
+your [backup] section should not define a host. If only the path is defined, it is
+assumed to be accessible via the host on which this program is running.</p>
+<p>If you have a host defined in your [common] section (which will be inherited by the
+[backup] section), you may define an empty-string host value in [backup] to force the
+use of a local path.</p>
+</li>
+<li><strong><a name="data_check_xyz" class="item">[data-check-XYZ]</a></strong>
+
+<p>Valid settings: <a href="#query"><code>query</code></a>, <a href="#result"><code>result</code></a>, <a href="#timeout"><code>timeout</code></a></p>
+<p>Data checks are queries used to verify connectivity to a database host, and proper operation
+of PostgreSQL (at least to a minimum level of operation). Each data-check requires a query
+to run, and the expected return value against which the query's output will be compared.
+Thus, if you have a data-check which calls a function/procedure in your database, that
+function must be immutable. As such, a data-check with the query &quot;select now()&quot; is unsuitable
+for use with failover.pl, since you cannot include a result setting in the configuration
+which will match that at all times. However, a data-check of
+&quot;select <code>now()</code> &gt; <code>now()</code> - interval '1 day'&quot; and a result setting of &quot;t&quot; would work just fine,
+as a properly-functioning PostgreSQL will always return the boolean &quot;t&quot;.</p>
+<p>Naming of data-check sections follow the same rules as host sections.</p>
 </li>
 </ul>
-
-<h2 id="Configuration-file">Configuration file</h2>
-
-<h3 id="Format">Format</h3>
-
-<p>The configuration file is in INI format. That is it contains a number of <i>sections</i>, each section containing number of <i>variables</i>.</p>
-
-<p>Section names are written within square brackets:</p>
-
-<pre><code>    [Section1]</code></pre>
-
-<p>Variables are written using notation:</p>
-
-<p><code>variable name</code> (<i>optional whitespace</i>) <code>=</code> (<i>optional whitespace</i>) <code>variable value</code></p>
-
-<p>for example:</p>
-
-<pre><code>    database-name = postgres</code></pre>
-
-<p>Empty lines are ignored, and so are comment lines, which should start with either <code>#</code> or <code>;</code> character.</p>
-
-<h3 id="Sections">Sections</h3>
-
-<p>There are three constant section names, each with its own set of variables, and a number of data checking sections which are used to define set of rules that the database should pass (after failover) to assume that everything is OK.</p>
-
-<h4 id="ip-takeover">ip-takeover</h4>
-
-<p>This section contains sets information about how to make failover, and how to test if it worked.</p>
-
-<p>Required variables:</p>
-
+<p>
+</p>
+<h2><a name="settings">Settings</a></h2>
+<p>The following is a list of every setting name possible, across all configuration sections,
+and what the setting is used for.</p>
 <ul>
+<li><strong><a name="database" class="item">database</a></strong>
 
-<li><p><b>ip</b> - hostname or ip that will be taken over</p>
-
+<p>Name of the database in a given host's PostgreSQL cluster.</p>
 </li>
-<li><p><b>old-host</b> - name or ip for host that will be used to ssh to release ip</p>
+<li><strong><a name="dstbackup" class="item">dstbackup</a></strong>
 
+<p>Path supplied to omnipitr-backup-master as the -x argument. Defines the directory used for
+WAL segment archiving. This setting should mirror whatever has been used when configuring
+omnipitr-archive's dst-backup.</p>
+<p>Defaults to $tempdir/dstbackup if not defined.</p>
 </li>
-<li><p><b>old-type</b> - which method of bringing the interface down should be used. Currently there are two possibilities:</p>
+<li><strong><a name="host" class="item">host</a></strong>
 
-<ul>
-
-<li><p><i>none</i> - failover.pl will not connect to old host to bring the interface down</p>
-
+<p>Hostname to which connections will be made. Depending on the context, these connections may
+be over SSH, rsync, or using psql to connect to PostgreSQL directly.</p>
 </li>
-<li><p><i>ifupdown</i> - failover.pl will use <code>ifdown interface-name</code> command</p>
+<li><strong><a name="interface" class="item">interface</a></strong>
 
+<p>Network interface to be used for the shared IP. Must be the full name of the interface as
+required by whatever method defined in the <a href="#method"><code>method</code></a> setting. E.g. On Linux machines
+using a single alias on the first physical interface and using the ifup/ifdown commands,
+your value for this setting would likely be &quot;eth0:0&quot;.</p>
 </li>
-</ul>
+<li><strong><a name="method" class="item">method</a></strong>
 
+<p>The method by which network interfaces will be activated and deactivated. Currently, the
+only supported values here at &quot;ifupdown&quot; and &quot;none&quot; (the latter of which will perform a
+no-op on IP takeover actions).</p>
 </li>
-<li><p><b>old-interface</b> - this is required if <b>old-type</b> is set to <i>ifupdown</i> - name of the interface that should be brough down on old server.</p>
+<li><strong><a name="omnipitr" class="item">omnipitr</a></strong>
 
+<p>The base path of the host's OmniPITR installation.</p>
 </li>
-<li><p><b>new-host</b> - name or ip for host that will be used to ssh to take the ip</p>
+<li><strong><a name="path" class="item">path</a></strong>
 
+<p>Used for backup hosts, this is the path to which the master backup will be performed,
+and the base directory used for WAL segment archiving.</p>
 </li>
-<li><p><b>new-type</b> - which method of bringing the interface up should be used. Currently there are two possibilities:</p>
+<li><strong><a name="pg_conf" class="item">pg-conf</a></strong>
 
-<ul>
-
-<li><p><b>none</b> - failover.pl will not connect to new host to bring the interface up</p>
-
+<p>The full path of each host's postgresql.conf configuration file.</p>
 </li>
-<li><p><b>ifupdown</b> - failover.pl will use <code>ifup interface-name</code> command</p>
+<li><strong><a name="pg_data" class="item">pg-data</a></strong>
 
+<p>The base PGDATA path for each host.</p>
 </li>
-</ul>
+<li><strong><a name="pg_port" class="item">pg-port</a></strong>
 
+<p>The port on which PostgreSQL listens.</p>
 </li>
-<li><p><b>new-interface</b> - this is required if <b>new-type</b> is set to <i>ifupdown</i> - name of the interface that should be brough up on new server.</p>
+<li><strong><a name="pg_recovery" class="item">pg-recovery</a></strong>
 
+<p>Path (relative to failover.pl base directory, or an absolute path) to the recovery.conf
+file to be used on systems being demoted. The file should be specified in host sections
+(or the common section), and it may be a path on the system from which you are running
+failover.pl (in which case it will be scp'ed to the remote host), or it may be a path
+on the remote host (in which case it will simply be cp'ed).</p>
 </li>
-</ul>
+<li><strong><a name="pg_reload" class="item">pg-reload</a></strong>
 
-<p>Optional variables:</p>
-
-<ul>
-
-<li><p><b>initial-ping-timeout</b> - Before any commands are sent over SSH, failover.pl tests if the shared IP is reachable. This value sets timeout for this check. Defaults to <i>3</i> (seconds).</p>
-
+<p>Full system command necessary to send a -HUP signal to the running PostgreSQL postmaster
+process.</p>
 </li>
-<li><p><b>old-user</b> - username to ssh to old server as. Generally it&#39;s better to use <i>~/.ssh/config</i>, as explained in <i>howto.pod</i>.</p>
+<li><strong><a name="pg_restart" class="item">pg-restart</a></strong>
 
+<p>Full system command necessary to restart PostgreSQL.</p>
 </li>
-<li><p><b>new-user</b> - username to ssh to new server as. Generally it&#39;s better to use <i>~/.ssh/config</i>, as explained in <i>howto.pod</i>.</p>
+<li><strong><a name="pg_start" class="item">pg-start</a></strong>
 
+<p>Full system command necessary to cold start PostgreSQL.</p>
 </li>
-<li><p><b>final-ping-timeout</b> - Timeout for final check, after IP takeover. This can take significantly longer due to ARP cache (check <i>howto.pod</i> for hints on how to make it shorter). Defaults to <i>60</i> (seconds).</p>
+<li><strong><a name="pg_stop" class="item">pg-stop</a></strong>
 
+<p>Full system command necessary to halt PostgreSQL.</p>
 </li>
-</ul>
+<li><strong><a name="pg_user" class="item">pg-user</a></strong>
 
-<h4 id="db-promotion">db-promotion</h4>
-
-<p>This section contains configuration for promoting slave to master/standalone slave.</p>
-
-<p>Currently failover.pl can do it only by creating trigger file - which is method used by PostgreSQL itself (in case of Streaming Replication), and by most (or even all) tools that help replicate using WAL segment files.</p>
-
-<p>Required variables:</p>
-
-<ul>
-
-<li><p><b>host</b> - hostname or ip of slave server to use when connecting over SSH</p>
-
+<p>Database username used to connect to a given host's PostgreSQL cluster.</p>
 </li>
-<li><p><b>trigger-file</b> - filename (including full path) that should be created. Actual creation is done by simply running <code>touch trigger-file</code>, so it is important that directory, in which <i>trigger-file</i> should be placed, already exists.</p>
+<li><strong><a name="query" class="item">query</a></strong>
 
+<p>The SQL query issued to PostgreSQL hosts to verify proper database operation. Must
+result in a consistent value. That value may be any string. It does not have to be
+a single boolean value, though those are simplest to match against.</p>
 </li>
-</ul>
+<li><strong><a name="result" class="item">result</a></strong>
 
-<p>Optional variables:</p>
-
-<ul>
-
-<li><p><b>user</b> - username to ssh to server as. Generally it&#39;s better to use <i>~/.ssh/config</i>, as explained in <i>howto.pod</i>.</p>
-
+<p>The exact result expected from a data-check query, as defined by the <a href="#query"><code>query</code></a>
+setting, and as formatted by psql (booleans become &quot;t&quot; or &quot;f&quot; and so on). Be careful
+to ensure that you match any psqlrc settings you may have configured for the user
+under which failover.pl is run (e.g. a local .psqlrc may define NULLs to appear as
+some arbitrary string, say &quot;NULLNULLNULL&quot;, and if your data-check query is intended
+to return a NULL, that custom string is what you must match against).</p>
 </li>
-</ul>
+<li><strong><a name="tempdir" class="item">tempdir</a></strong>
 
-<h4 id="db-check">db-check</h4>
-
-<p>db-check section configures checking whether slave is accessible, and writable, under <i>shared IP</i></p>
-
-<p>Required variables:</p>
-
-<ul>
-
-<li><p><b>database</b> - database name to connect to</p>
-
+<p>Used to supply the value for omnipitr-backup-master's -t argument. Defines the temp
+directory used during the backup procedure. This will default to /tmp if not
+supplied.</p>
 </li>
-<li><p><b>user</b> - username to use to authenticate when connecting to database</p>
+<li><strong><a name="timeout" class="item">timeout</a></strong>
 
+<p>Timeout in seconds which will be used for various commands (connecting via SSH,
+runing data-check queries, etc.).</p>
 </li>
-<li><p><b>port</b> - port number to connect to PostgreSQL</p>
+<li><strong><a name="trigger_file" class="item">trigger-file</a></strong>
 
+<p>The full path to the trigger-file on a PostgreSQL host used to switch omnipitr-restore
+from replication to master read-write mode.</p>
 </li>
-</ul>
+<li><strong><a name="user" class="item">user</a></strong>
 
-<p>You might have noticed that there is no <i>host</i> nor <i>ip</i> specified above - this is because database checking uses <i>ip</i> from <i>ip-takeover</i> section.</p>
-
-<p>Optional variables:</p>
-
-<ul>
-
-<li><p><b>timeout</b> - After how many seconds (default: <i>60</i>) to give up, and assume something went wrong.</p>
-
+<p>Username used to connect to hosts via SSH.</p>
 </li>
 </ul>
-
-<h4 id="data-check--">data-check-*</h4>
-
-<p>This is not a single section, but a number of optional sections with names starting with <code>data-check-</code> and having some, unique within config file, suffix.</p>
-
-<p>For example:</p>
-
-<ul>
-
-<li><p>[data-check-1]</p>
-
-</li>
-<li><p>[data-check-2]</p>
-
-</li>
-<li><p>[data-check-orders]</p>
-
-</li>
-<li><p>[data-check-users]</p>
-
-</li>
-</ul>
-
-<p>Required variables:</p>
-
-<ul>
-
-<li><p><b>query</b> - query that should be run in new master database for this check</p>
-
-</li>
-<li><p><b>result</b> - expected result. Queries are run using standard options, so if the query returns multiple columns, it will be separated with <code>|</code> character (pipe).</p>
-
-</li>
-</ul>
-
-<p>Optional variables:</p>
-
-<ul>
-
-<li><p><b>title</b> - name of the check, as reported when running it. Defaults to name of the section.</p>
-
-</li>
-</ul>
-
-<h1 id="COPYRIGHT">COPYRIGHT</h1>
-
-<p>The OmniPITR project is Copyright (c) 2009-2012 OmniTI. All rights reserved.</p>
-
+<p>
+</p>
+<hr />
+<h1><a name="sample_configuration">SAMPLE CONFIGURATION</a></h1>
+<p>What follows is a fairly minimal configuration that defines three database servers, one
+backup server, a shared IP intended to point to the current master database, and two
+data-checks. Most of the options are the same across hosts, which allows them to occupy
+space only in the common section.</p>
+<pre>
+    [common]
+    database = foobar
+    pg-port = 5432
+    pg-user = baz
+    pg-recovery = recovery.conf
+    user = postgres
+    interface = eth0:1
+    method = ifupdown</pre>
+<pre>
+    [shared-ip]
+    host = db.internal.company.com</pre>
+<pre>
+    [host-db1]
+    host = db1.internal.company.com</pre>
+<pre>
+    [host-db2]
+    host = db2.internal.company.com</pre>
+<pre>
+    [host-db3]
+    host = db3.internal.company.com
+    interface = eth1</pre>
+<pre>
+    [backup]
+    user = backups
+    host = backup.internal.company.com
+    path = /backups/database/foobar</pre>
+<pre>
+    [data-check-interval]
+    query = select now() &gt; now() - interval '1 hour'
+    result = t</pre>
+<pre>
+    [data-check-numbers]
+    query = select count(num) from generate_series(1,100,10) gs(num)
+    result = 10</pre>
+<p>
+</p>
+<hr />
+<h1><a name="internals">INTERNALS</a></h1>
+<p>The following sections are intended for developers working on failover.pl itself and
+are not particularly relevant for end-users of the program.</p>
+<p>This program is intended to be usable on a system with only Perl core modules
+installed. Modifications to the program should maintain this if at all possible,
+requiring no dependencies outside CORE.</p>
+<p>
+</p>
+<h2><a name="basic_structure">Basic Structure</a></h2>
+<p>The failover.pl internals are subdivided into several packages. The primary package,
+<code>Failover</code>, contains the high-level command line parsing, and action dispatchers.</p>
+<p><code>Failover::Config</code> contains methods relating to locating, reading, and interacting
+with the failover.ini configuration (either the default, located automatically by
+failover.pl, or a configuration file pointed to by the --config command line argument).</p>
+<p><code>Failover::Action</code> contains methods that provide the actual functionality behind
+host promotion, demotion, backup, and testing.</p>
+<p><code>Failover::Command</code> contains methods for constructing, executing, and capturing the
+output of any shell or psql commands that need to be run locally or remotely. Commands
+objects are defined through chained-method invocation.</p>
+<p><code>Failover::Utils</code> contains a number of convenience subroutines. Things like sorting
+hostnames (while handling little details like host-10 coming after host-5), printing
+confirmation prompts, log messages, errors, and so on.</p>
+<p>
+</p>
+<h2><a name="package__failover">Package: Failover</a></h2>
+<p>Contains methods to handle command line arguments and running of supported actions.</p>
+<p>
+</p>
+<h3><a name="new">new</a></h3>
+<p>Constructor for the Failover class. Parses command line options and locates the
+configuration file.</p>
+<p>
+</p>
+<h3><a name="usage">usage</a></h3>
+<p>Display of program usage information.</p>
+<p>
+</p>
+<h3><a name="run">run</a></h3>
+<p>Performs the requested actions. Short-circuits if running in test mode, otherwise it displays a
+summary of the current configuration, prompts to continue, and then proceeds to run promotions, then
+IP takeovers, then demotions, then backups. This order is done to minimize possible downtime.</p>
+<p>The new master should already be promoted before it assumes the shared IP. Running the demotion(s)
+after that also allows for the user to terminate the program should they encounter an error or
+self-doubt. Prior to the demotion(s) running, they will still have their original master to fall
+back on to (assuming the failover is being done as a planned event, that is).</p>
+<p>Backup is performed last because, depending on the size of the database(s) being backed up, this
+operation may take a significant amount of time.</p>
+<p>
+</p>
+<h3><a name="show_config">show_config</a></h3>
+<p>Wrapper around configuration summary display method from Failover::Config.</p>
+<p>
+</p>
+<h3><a name="test_setup">test_setup</a></h3>
+<p>Performs a configuration test, verifying that hosts defined in the configuration are all reachable
+and have all the necessary software installed at the specified (or default) locations.</p>
+<p>
+</p>
+<h3><a name="config">config</a></h3>
+<p>Returns the Failover object's reference to the Failover::Config object.</p>
+<p>
+</p>
+<h3><a name="demote">demote</a></h3>
+<p>Returns the list of hosts marked for demotion, as provided on failover.pl's command line.</p>
+<p>
+</p>
+<h3><a name="promote">promote</a></h3>
+<p>Returns the list of hosts marked for promotion, as provided on failover.pl's command line.</p>
+<p>
+</p>
+<h3><a name="promote">promote</a></h3>
+<p>Returns the list of hosts marked for backup, as provided on failover.pl's command line.</p>
+<p>
+</p>
+<h3><a name="dry_run">dry_run</a></h3>
+<p>Returns a boolean representing whether this is a dry-run, or not. Should it return true,
+no modifications should be made to any systems. Default is false, but can be enabled with
+command line argument --dry-run.</p>
+<p>
+</p>
+<h3><a name="exit_on_error">exit_on_error</a></h3>
+<p>Returns a boolean representing whether the program should terminate on error conditions.
+Default is false, but can be true if --exit-on-error was passed on command line.</p>
+<p>
+</p>
+<h3><a name="skip_confirmation">skip_confirmation</a></h3>
+<p>Returns a boolean representing whether the program should prompt the user to confirm something
+before proceeding. Default is false, but will be true if --skip-confirmation was provided.</p>
+<p>
+</p>
+<h3><a name="test">test</a></h3>
+<p>Returns a boolean representing whether the Test action was requested. Default is false, but
+will be true if --test was provided on the command line.</p>
+<p>
+</p>
+<h3><a name="verbose">verbose</a></h3>
+<p>Returns an integer value representing the level of verbosity requested. Defaults to 0, but
+can be as high as the number of times --verbose/-v were specified on the command line.</p>
+<p>
+</p>
+<h2><a name="package__failover__action">Package: Failover::Action</a></h2>
+<p>Methods encapsulating the logic of actions provided by failover.pl. Individual steps taken
+during promotion, demotion, and backup and detailed and managed within this package.</p>
+<p>
+</p>
+<h3><a name="ip_takeover">ip_takeover</a></h3>
+<p>Class method used to issue commands on a remote server, dependent upon the specific host
+configuration, to activate an appropriate interface for the shared IP. This method will
+attempt to call the <code>ip_yield</code> on all other hosts to ensure that only one machine is
+attempting to lay claim to the shared address at any given time. It is not necessary to
+call the yield method directly, except in circumstances where you may wish to specifically
+disable an interface on a host without also activating the shared address interface
+on another.</p>
+<p>
+</p>
+<h3><a name="ip_yield">ip_yield</a></h3>
+<p>Method for disabling the interface responsible for listening on the shared address's IP. This
+method is called by <code>ip_takeover</code> automatically and generally does not need to be called
+directly.</p>
+<p>
+</p>
+<h3><a name="backup">backup</a></h3>
+<p>Action method to issue commands necessary to perform a full master backup on a PostgreSQL
+host server. The time required for this action depends entirely on the size of the database
+cluster, the network speed between it and the backup host, and the write speed of the disks
+on the backup target. The actual backup is performed by OmniPITR; this method is merely a
+wrapper around that program.</p>
+<p>
+</p>
+<h3><a name="demotion">demotion</a></h3>
+<p>This action issues the commands necessary to demote a read-write database host to a replicant
+state, using OmniPITR. Demoting a host does not, on its own, release the shared IP. Thus, if the
+failover.pl script is run with nothing but a --demote &lt;host&gt; then no changes will be made in where
+the shared address points. Only a --promote will alter network settings on remote hosts.</p>
+<p>Issuing a demotion will cause failover.pl to attempt to locate the most recent master backup,
+restore from that, and then enter continuous recovery mode against the configured backup host's
+WAL segments. Under the hood, these replication services are handled by the core PostgreSQL
+configuration and OmniPITR's tools.</p>
+<p>
+</p>
+<h3><a name="promotion">promotion</a></h3>
+<p>The promotion action creates the trigger file on a remote host to indicate to OmniPITR and
+PostgreSQL that they should exit recovery mode and enter full read-write operation. It will
+then repeatedly check (until the timeout expires) that it is able to perform a modifying DML
+statement against the host's database (creation of a temp table called failover_check)
+before reporting a successful promotion.</p>
+<p>
+</p>
+<h3><a name="retry_check">retry_check</a></h3>
+<p>Wrapper function to issue a command, and on failure prompt the user as to whether to immediately
+attempt the same again, or terminate operation.</p>
+<p>
+</p>
+<h3><a name="cmd_ifupdown">cmd_ifupdown</a></h3>
+<p>Returns a formatted interface activation/deactivation command to be issued on a remote
+host. Used during IP takeovers and yields.</p>
+<p>
+</p>
+<h3><a name="check_wal_status">check_wal_status</a></h3>
+<p>Attempts to locate active WAL archiving  on a remote host.</p>
+<p>
+</p>
+<h3><a name="check_postmaster_offline">check_postmaster_offline</a></h3>
+<p>Verifies that PostgreSQL postmaster processes are not running on a remote host. Uses both a
+psql check and remote SSH command.</p>
+<p>
+</p>
+<h3><a name="check_postmaster_online">check_postmaster_online</a></h3>
+<p>Reverse of the _offline check. Verifies that a PostgreSQL postmaster is running on the remote
+host and that it can be contacted via psql.</p>
+<p>
+</p>
+<h3><a name="latest_base_backup">latest_base_backup</a></h3>
+<p>Using the backup target configuration(s) from the failover.ini, this method attempts to
+locate the most recently performed master database backup. Used prior to a demotion so that
+the newly-initiated replication host starts from a clean backup before attempting to
+replay WAL segments.</p>
+<p>
+</p>
+<h3><a name="locate_recovery_conf">locate_recovery_conf</a></h3>
+<p>Performs a series of checks to locate an appropriate copy of the recovery.conf to be
+used when demoting a PostgreSQL host.</p>
+<p>
+</p>
+<h3><a name="interface_activate">interface_activate</a></h3>
+<p>Marks an interface on a host as permanently active (will remain enabled after reboot).</p>
+<p>
+</p>
+<h3><a name="interface_deactivate">interface_deactivate</a></h3>
+<p>Marks an interface on a host as disabled, to prevent it from being initialized upon
+reboot (and potentially causing an IP conflict if that machine is not currently the
+owner of the related virtual IP).</p>
+<p>
+</p>
+<h2><a name="package__failover__command">Package: Failover::Command</a></h2>
+<p>Methods to create and issue local, remote, and psql commands. Command objects are used
+via chained-method calls. Except where noted, methods all return their own object on
+success, or nothing on error (if they didn't die first).</p>
+<p>
+</p>
+<h3><a name="new">new</a></h3>
+<p>Constructor for Failover::Command objects. Accepts a list to be passed into a <code>system()</code>
+call.</p>
+<p>
+</p>
+<h3><a name="name">name</a></h3>
+<p>Allows a human-readable description/name for the command to be included in any logging or
+error output. Any printable string may be supplied.</p>
+<p>
+</p>
+<h3><a name="host">host</a></h3>
+<p>Sets the remote hostname to be connected to before running the given command. For SSH commands,
+this is the hostname to which ssh will login. For psql commands, this is the database host
+psql will connect to using -h.</p>
+<p>
+</p>
+<h3><a name="port">port</a></h3>
+<p>Remote port to be used when connecting. Applies to both SSH and psql commands, though it is
+recommended to use an <code>ssh_config(5)</code> for setting ports on remote shell systems.</p>
+<p>
+</p>
+<h3><a name="user">user</a></h3>
+<p>Remote user to connect as, for both SSH and psql commands. Either will default to the user
+running failover.pl unless set through this method.</p>
+<p>
+</p>
+<h3><a name="sudo">sudo</a></h3>
+<p>Indicates that the remote shell command should be issued through sudo. Ideally, as few commands
+as necessary should make use of sudo, but some will require it (restarting the database, changing
+network interfaces, etc). Please note that there is no facility to provide a password to sudo
+through failover.pl, so the remote user will need to be configured for passwordless sudo.</p>
+<p>
+</p>
+<h3><a name="database">database</a></h3>
+<p>Name of the database against which remote psql commands will be issued.</p>
+<p>
+</p>
+<h3><a name="expect_error">expect_error</a></h3>
+<p>By default, all command objects will expect to receive a status code of 0 (indicating success)
+from the commands they run. This will invert that behavior and cause the Failover::Command
+object to return true to its caller when its command has failed.</p>
+<p>
+</p>
+<h3><a name="silent">silent</a></h3>
+<p>By default, command objects will print output with their name and success/failure. Some
+commands are not necessary or desirable to send output, and this will suppress that.</p>
+<p>
+</p>
+<h3><a name="verbose">verbose</a></h3>
+<p>Sets the verbosity of the command. Higher levels will eventually result in the the raw
+output of commands being run printed out to the console.</p>
+<p>
+</p>
+<h3><a name="compare">compare</a></h3>
+<p>Sets a string to which a command's STDOUT is required to match for it to be considered
+a success.</p>
+<p>
+</p>
+<h3><a name="psql">psql</a></h3>
+<p>Indicates that the command object should issue its command through psql.</p>
+<p>
+</p>
+<h3><a name="ssh">ssh</a></h3>
+<p>Indicates that the command object should issue its command through ssh.</p>
+<p>
+</p>
+<h3><a name="run">run</a></h3>
+<p>The final method called, once all options for the command have been set. Results in
+the command being issued. STDOUT and STDERR are captured and available for inspection
+later.</p>
+<p>
+</p>
+<h3><a name="status">status</a></h3>
+<p>Returns boolean for success or failure of the command. The status returned here is
+not necessarilly the raw status returned by the remote command, as it takes into
+account settings such as <code>expect_failure()</code>.</p>
+<p>
+</p>
+<h3><a name="stderr">stderr</a></h3>
+<p>Returns a scalar containing the raw STDERR output from the remote command.</p>
+<p>
+</p>
+<h3><a name="stdout">stdout</a></h3>
+<p>Returns a scalar containing the raw STDOUT output from the remote command.</p>
+<p>
+</p>
+<h3><a name="print_fail">print_fail</a></h3>
+<p>Prints the [FAIL] status on console output for commands.</p>
+<p>
+</p>
+<h3><a name="print_ok">print_ok</a></h3>
+<p>Prints the [OK] status on console output for commands.</p>
+<p>
+</p>
+<h3><a name="print_running">print_running</a></h3>
+<p>Prints the command name on console output for commands.</p>
+<p>
+</p>
+<h2><a name="package__failover__config">Package: Failover::Config</a></h2>
+<p>Manages the location, reading, and interaction with failover.pl's configuration file.</p>
+<p>
+</p>
+<h3><a name="new">new</a></h3>
+<p>Constructor for Failover::Config objects.</p>
+<p>
+</p>
+<h3><a name="display">display</a></h3>
+<p>Produces terminal-width output summarizing the configuration as parsed by this package.
+Groups sections together and displays their fully-configured states -- options defined
+in the [common] section in the configuration file will be displayed here with the
+individual hosts, to make it as clear as possible what settings will be used for each
+machine.</p>
+<p>
+</p>
+<h3><a name="display_multisection_block">display_multisection_block</a></h3>
+<p>Method to work out the nearly-most-efficient layout for displaying several hosts on
+a given terminal size. Keeps everything lined up and packs each host together into
+the minimum width necessary for the largest values to fit.</p>
+<p>
+</p>
+<h3><a name="append_section_summary">append_section_summary</a></h3>
+<p>Tacks on the lines of a section to the output being sent to the console. Each section may be
+multiple lines, and not all sections have the same lines (or the same number of lines). This
+takes care of that, so the display is as clean and readable as possible.</p>
+<p>
+</p>
+<h3><a name="read_config">read_config</a></h3>
+<p>Reads and parses the INI file into the internal nested hash structure, where each top-level
+key is the section name, and the value is a hashref of setting key-value pairs.</p>
+<p>
+</p>
+<h3><a name="validate">validate</a></h3>
+<p>Ensures that all required settings are present, and that no unknown setting names are
+encountered.</p>
+<p>
+</p>
+<h3><a name="normalize_backup">normalize_backup</a></h3>
+<p>Combines each backup section encountered with the common section, if present, to come
+up with the single, unified backup host configuration.</p>
+<p>
+</p>
+<h3><a name="normalize_checks">normalize_checks</a></h3>
+<p>Combines each data-check section encountered with the common section, if present, to come
+up with the single, unified data-check configuration.</p>
+<p>
+</p>
+<h3><a name="normalize_host">normalize_host</a></h3>
+<p>Combines each host section encountered with the common section, if present, to come
+up with the single, unified host configuration.</p>
+<p>
+</p>
+<h3><a name="normalize_shared">normalize_shared</a></h3>
+<p>Combines the shared IP section with the common section, if present, to come
+up with the single, unified shared IP configuration.</p>
+<p>
+</p>
+<h3><a name="normalize_section">normalize_section</a></h3>
+<p>Called by each of the section-specific normalize_ methods, with a section
+hashref containing all the setting key-values, followed by a list of setting
+names valid for the given section type.</p>
+<p>
+</p>
+<h3><a name="clean_value">clean_value</a></h3>
+<p>Trims setting values of whitespace, and quotes (if the quotes are matching at ^ and $).</p>
+<p>
+</p>
+<h3><a name="validate_section_name">validate_section_name</a></h3>
+<p>Compares an encountered section name with a whitelist of valid sections (taking
+into account that most sections are &lt;section&gt;-&lt;name&gt;).</p>
+<p>
+</p>
+<h3><a name="validate_setting_name">validate_setting_name</a></h3>
+<p>Ensures that an encountered setting is a valid one. Any settings in the configuration
+file which do not match the whitelist will trigger a fatal error, so as to prevent
+potentially harmful/invalid configurations from being used against production systems.</p>
+<p>
+</p>
+<h3><a name="section">section</a></h3>
+<p>Returns the section by name from the parsed and validated configuration.</p>
+<p>
+</p>
+<h3><a name="get_hosts">get_hosts</a></h3>
+<p>Returns the list of host names discovered in the configuration.</p>
+<p>
+</p>
+<h3><a name="get_backups">get_backups</a></h3>
+<p>Returns the list of backup host names discovered in the configuration.</p>
+<p>
+</p>
+<h3><a name="get_data_checks">get_data_checks</a></h3>
+<p>Returns the list of data check names discovered in the configuration.</p>
+<p>
+</p>
+<h3><a name="get_shared_ips">get_shared_ips</a></h3>
+<p>Returns the list of shared IP names discovered in the configuration.</p>
+<p>
+</p>
+<h2><a name="package__failover__utils">Package: Failover::Utils</a></h2>
+<p>Convenience subroutines used elsewhere.</p>
+<p>
+</p>
+<h3><a name="die_error">die_error</a></h3>
+<p>Issues a call to <code>print_error()</code> with all its arguments and then exits with the return
+code of 255 to indicate a fatal error.</p>
+<p>
+</p>
+<h3><a name="get_confirmation">get_confirmation</a></h3>
+<p>Displays a Y/N prompt, with a default response should the user just press Enter, and
+blocks for user input.</p>
+<p>
+</p>
+<h3><a name="prompt_user">prompt_user</a></h3>
+<p>Displays a no-answer-necessary prompt to the user, suitable for pausing script operation
+until the user indicates they have satisfied some external condition.</p>
+<p>
+</p>
+<h3><a name="log">log</a></h3>
+<p>Logs the given message to STDOUT. The first argument is used as a format specifier to
+printf, with all following arguments passed as arguments to that same printf. Timestamps,
+current PID, etc. are all added to the output.</p>
+<p>
+</p>
+<h3><a name="print_error">print_error</a></h3>
+<p>Prints an error message to output.</p>
+<p>
+</p>
+<h3><a name="sort_section_names">sort_section_names</a></h3>
+<p>Returns an array of sorted section names, to simplify ensuring that host-10 will be
+sorted after host-4.</p>
+<p>
+</p>
+<h3><a name="term_width">term_width</a></h3>
+<p>Does its best to determine the width of the current terminal, without using non-CORE
+Perl modules. Generally works okay on raw terminals as well as inside screen/tmux.</p>
 
 </body>
 
 </html>
-
-
