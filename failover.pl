@@ -91,7 +91,7 @@ behavior.
 
 Specifies a configuration file to be used. This file, detailed in the L<CONFIGURATION>
 section later, defines all hosts, IP addresses, backup targets, and global settings. By
-defaults, failover.pl will use the first of the following files that exists and is readable:
+default, failover.pl will use the first of the following files that exists and is readable:
 
     $scriptdir/failover.ini
     ~/failover.ini
@@ -170,13 +170,22 @@ the character class [a-z0-9_-]. The names must be unique.
 
 =item * [backup-XYZ]
 
-Valid settings: C<host>, C<user>, C<path>
+Valid settings: C<host>, C<user>, C<path>, C<tempdir>, C<dstbackup>
 
 Defines a host which is used as a backup target. Settings used to run omnipitr-master-backup
 to produce full-backups using rsync-over-ssh, as well as configure a -dr target for
 omnipitr-archive for ongoing WAL archiving.
 
 Backup target section naming follows the same rules as host sections.
+
+If you wish to use a local path as the backup destination (e.g. your backup server already
+exports the target directory over NFS or similar, and thus no scp/rsync is needed), then
+your [backup] section should not define a host. If only the path is defined, it is
+assumed to be accessible via the host on which this program is running.
+
+If you have a host defined in your [common] section (which will be inherited by the
+[backup] section), you may define an empty-string host value in [backup] to force the
+use of a local path.
 
 =item * [data-check-XYZ]
 
@@ -206,6 +215,14 @@ and what the setting is used for.
 =item * database
 
 Name of the database in a given host's PostgreSQL cluster.
+
+=item * dstbackup
+
+Path supplied to omnipitr-backup-master as the -x argument. Defines the directory used for
+WAL segment archiving. This setting should mirror whatever has been used when configuring
+omnipitr-archive's dst-backup.
+
+Defaults to $tempdir/dstbackup if not defined.
 
 =item * host
 
@@ -290,6 +307,12 @@ under which failover.pl is run (e.g. a local .psqlrc may define NULLs to appear 
 some arbitrary string, say "NULLNULLNULL", and if your data-check query is intended
 to return a NULL, that custom string is what you must match against).
 
+=item * tempdir
+
+Used to supply the value for omnipitr-backup-master's -t argument. Defines the temp
+directory used during the backup procedure. This will default to /tmp if not
+supplied.
+
 =item * timeout
 
 Timeout in seconds which will be used for various commands (connecting via SSH,
@@ -352,6 +375,10 @@ space only in the common section.
 
 The following sections are intended for developers working on failover.pl itself and
 are not particularly relevant for end-users of the program.
+
+This program is intended to be usable on a system with only Perl core modules
+installed. Modifications to the program should maintain this if at all possible,
+requiring no dependencies outside CORE.
 
 =head2 Basic Structure
 
