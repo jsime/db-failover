@@ -43,17 +43,16 @@ have both vito and michael running PostgreSQL, with some kind of WAL-based
 replication (Streaming Replication, OmniPITR, or anything else that handles
 archive and restore of xlog files).
 
-It is also assumes that application connects to database using 192.168.0.101 ip.
+It also assumes that application connects to database using 192.168.0.101 ip.
 
 =head2 Setup procedure
 
 =head3 Shared IP setup
 
-On both, vito and michael, you have to add new interface, which will be alias
-on existing main interface - eth0.
-
-The way to do it is different based on OS/Distribution, you have, but the
-general ideas should be the same.
+On both, vito and michael, you have to add new interfaces, which will be an alias
+of existing main interface - eth0. The exact manner of setting up the interface
+aliases depends on your OS and distribution, though the general concepts are the
+same.
 
 On Debian/Ubuntu, you have to modify F</etc/network/interfaces> file, which will
 most likely have inside something like:
@@ -181,85 +180,140 @@ Once you have this file path, you are ready to create F<failover.ini> file. For
 my example, let's assume the trigger file is supposed to be
 F</tmp/trigger.file>.
 
-First, in the ini file, we need section on IP takeover:
+The configuration file may be located in the same directory as F<failover.pl>,
+in your home directory, or at F</etc/db-failover/failover.ini>. The program will
+use the first of those, in that order, that exists and which is readable. If you
+want, you can also place the file anywhere else and use the C<-c> argument to
+F<failover.pl> to manually specify the location. For this howto, we'll assume
+the F<failover.pl> and F<failover.ini> are in the same directory.
+
+First, we need to define the shared address:
 
     [ip-takeover]
-    old-host=vito
-    old-user=root
-    new-user=root
-    new-host=michael
-    old-type=ifupdown
-    old-interface=eth0:0
-    new-type=ifupdown
-    new-interface=eth0:0
-    ip=godfather
+    host = godfather
 
-Of course instead of using names you can use IPs.
+You can alternatively use the IP address in place of hostnames anywhere you like.
 
-Then, we need section that will configure how to promote slave:
+With the shared name (which should resolve to the virtual IP assigned to the
+aliased interfaces) set up, each of the database hosts should be defined next. A
+[common] section will also be set up so that we can avoid defining repeated
+values. Any options set in the [common] section will be inherited by all other
+sections that use those particular options, though you can override that by
+also setting it in a specific section.
 
-    [db-promotion]
-    host=michael
-    user=postgres
-    trigger-file=/tmp/trigger.file
+    [common]
+    user = postgres
+    interface = eth0:0
+    method = ifupdown
+    database = postgres
+    pg-user = postgres
+    pg-port = 5432
+    pg-data = /pgdata
+    omnipitr = /opt/omnipitr
 
-Finally, last B<required> section, is db-check, which contains information about
-how to connect to database to see that promotion worked:
+    [host-michael]
+    host = michael
 
-    [db-check]
-    user=postgres
-    port=5432
-    database=postgres
+    [host-vito]
+    host = vito
 
-F<failover.pl> will use I<ip> from I<ip-takeover> section as host to connect to
+In our examples here, the only things that differ so far between the two PostgreSQL
+hosts are their network hostnames, so we're able to put everything else into the
+[common] section.
+
+We also need to define a location where backups will be stored, so that the process
+of demoting a host to a slave will know where to retrieve a clean backup to
+restore.
+
+    [backup]
+    path = /pgbackups
+
+Because this example does not define a host, F<failover.pl> will treat it as a
+locally-accessible path on the machine from which this program is run. If you wish
+to store and retrieve the backups (generated with the relevant OmniPITR tools)
+on a remote host over ssh/rsync, then include appropriate values for both the
+C<host> and C<user> settings, in addition to the C<path>.
+
+Finally, last B<required> section, is data-check, which can define queries to
+verify proper database operation. Any number of these sections may be defined
+so that you can test as many or as few pieces of your database as you like. Each
+data-check section should be named uniquely, though if you only have one it may
+be safely named just "data-check".
+
+    [data-check]
+    query = select 2 > 1
+    result = t
+
+The query value should be any read-only query that you expect to succeed and return
+a single scalar value. The result should be a string which will match the expected
+(and successful) result of that query. In the case of the example query above, it
+is expected to return a boolean value, which PostgreSQL represents by default as
+either 't' or 'f'.
+
+F<failover.pl> will use I<host> from I<shared-ip> section as host to connect to
 to run all the db checks.
-
-That's basically it. You might want to add some data-checks. For example. Let's
-assume you have objects table, and this table has relatively high write traffic.
-And you want to assume that everything worked fine only if last object update
-happened not earlier than 2 minutes ago:
-
-    [data-check-objects-updated]
-    query=select max(last_updated_ts) >= now() - '2 minutes'::interval from objects;
-    result=t
 
 And that's about it. Full F<failover.ini> would be:
 
-    [ip-takeover]
-    old-host=vito
-    old-user=root
-    new-user=root
-    new-host=michael
-    old-type=ifupdown
-    old-interface=eth0:0
-    new-type=ifupdown
-    new-interface=eth0:0
-    ip=godfather
+    [common]
+    user = postgres
+    interface = eth0:0
+    method = ifupdown
+    database = postgres
+    pg-user = postgres
+    pg-port = 5432
+    pg-data = /pgdata
+    omnipitr = /opt/omnipitr
 
-    [db-promotion]
-    host=michael
-    user=postgres
-    trigger-file=/tmp/trigger.file
+    [host-michael]
+    host = michael
 
-    [db-check]
-    user=postgres
-    port=5432
-    database=postgres
+    [host-vito]
+    host = vito
 
-    [data-check-objects-updated]
-    query=select max(last_updated_ts) >= now() - '2 minutes'::interval from objects;
-    result=t
+    [backup]
+    path = /pgbackups
 
-Of course you might add more B<data-check-*> sections, if you want.
+    [data-check]
+    query = select 2 > 1
+    result = t
 
-In case your ssh was listening on non-default port, the correct solution, is to
-add entry in F<~/.ssh/config> file, like:
+For remote shell access (required to run backups, move recovery.conf files into
+place, enable/disable network interfaces, etc.), if sshd on any of your remote
+systems runs on a port other than 22, the correct solution is to set this in
+your F<~/.ssh/config> file:
 
     Host michael
         Port 22222
 
-Of course, F<~/.ssh/config> can be used also to specify username, in which case
-all the B<*-user> parameters in F<failvoer.ini> can be skipped.
+At this point, you should be ready to begin running F<failover.pl>. Running it
+without any arguments (assuming your F<failover.ini> is in one of the default
+locations), will produce a summary of your settings, with all of the options set
+in the [common] section applied appropriately. If you want to test your configuration
+and connectivity to all the hosts defined, run:
+
+    failover.pl --test
+
+Promoting a new master host is as straight forward (assuming your configuration
+is correct) as:
+
+    failover.pl --promote <host>
+
+Where I<host> matches one of your C<[host-*]> sections. Demotion is very similar:
+
+    failover.pl --demote <host>
+
+With the assumption that I<vito> is currently the master, we can switch their roles
+by doing:
+
+    failover.pl --promote michael --demote vito
+
+The program will also operate on the command line arguments in an order which ensures
+one master server is present. Thus, if you run:
+
+    failover.pl --demote vito --promote michael
+
+The promotion of I<michael> will be performed first, before demoting I<vito>.
 
 =head1 COPYRIGHT
 
