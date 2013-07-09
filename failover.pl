@@ -1154,7 +1154,10 @@ sub demotion {
     if ($cmd->status != 0) {
         $cmd = Failover::Command->new(
                 qw( tar cf ),
-                sprintf('%s.%04d-%02d-%02d.tar', $host_cfg->{'pg-data'}, (localtime())[5] + 1900, (localtime())[4,3]),
+                sprintf('%s.%04d-%02d-%02d.tar', $host_cfg->{'pg-data'},
+                    (localtime())[5] + 1900,
+                    (localtime())[4] + 1,
+                    (localtime())[,3]),
                 $host_cfg->{'pg-data'}
             )
             ->name(sprintf('Archiving existing datadir on %s.', $host))
