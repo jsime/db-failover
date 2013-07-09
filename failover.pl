@@ -671,11 +671,23 @@ sub test_setup {
 
     # Test SSH connectivity to all backup hosts
     foreach my $host (Failover::Utils::sort_section_names($self->config->get_backups)) {
-        my $cmd = Failover::Command->new('/bin/true')->name(sprintf('Connectivity Test - %s', $host))
-            ->verbose($self->verbose)
-            ->host($self->config->section($host)->{'host'})
-            ->user($self->config->section($host)->{'user'})
-            ->ssh->run($self->dry_run);
+        # Backup target can be a remote host, or a local directory -- if there's a value
+        # for the hostname, it's remote and we need to test SSH connectivity. Otherwise,
+        # the path setting is just a local directory we need to ensure exists.
+        my $cmd;
+        if (exists $self->config->section($host)->{'host'} && length($self->config->section($host)->{'host'}) > 0) {
+            $cmd = Failover::Command->new('/bin/true')->name(sprintf('Connectivity Test - %s', $host))
+                ->verbose($self->verbose)
+                ->host($self->config->section($host)->{'host'})
+                ->user($self->config->section($host)->{'user'})
+                ->ssh->run($self->dry_run);
+        } else {
+            $cmd = Failover::Command->new('test','-d',$self->config->section($host)->{'path'})->name(sprintf('Connectivity Test - %s', $host))
+                ->verbose($self->verbose)
+                ->host($self->config->section($host)->{'host'})
+                ->user($self->config->section($host)->{'user'})
+                ->run($self->dry_run);
+        }
 
         next if $cmd->status == 0;
         exit(1) if $self->exit_on_error;
