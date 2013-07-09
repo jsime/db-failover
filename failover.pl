@@ -1138,6 +1138,27 @@ sub demotion {
 
     my ($cmd);
 
+    # stop postgresql (or prompt user if no pg-stop command defined)
+    if (exists $host_cfg->{'pg-stop'}) {
+        $cmd = Failover::Command->new($host_cfg->{'pg-stop'})
+            ->name(sprintf('Stopping PostgreSQL on %s', $host))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->sudo(1)
+            ->ssh->run($failover->dry_run);
+
+        if ($cmd->status != 0) {
+            Failover::Utils::print_error("An error was encountered stopping PostgreSQL on %s.\n%s",
+                $host, $cmd->stderr);
+            exit(1) if $failover->exit_on_error;
+            Failover::Utils::prompt_user('Please resolve this issue and stop PostgreSQL before proceeding.');
+        }
+    } else {
+        Failover::Utils::prompt_user(sprintf('No pg-stop command defined for %h. Please stop PostgreSQL manually.', $host));
+    }
+
     # check that postmaster is not running (prompt to continue or retest if it is)
     retry_check($failover, sub { check_postmaster_offline($failover, $host) });
 
