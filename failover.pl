@@ -1218,26 +1218,67 @@ sub demotion {
         ->name(sprintf('Restoring base backup to host %s.', $host))
         ->host($host_cfg->{'host'})
         ->port($host_cfg->{'port'})
-        ->user($host_cfg->{'user'})
-        ->ssh->run($failover->dry_run);
+        ->user($host_cfg->{'user'});
+    $cmd->ssh if $host_cfg->{'host'};
+    $cmd->run($failover->dry_run);
     exit(1) if $failover->exit_on_error && $cmd->status != 0;
 
     # add recovery.conf from pg-recovery configuration path, if defined, otherwise
     # prompt user to put the file into place before we proceed with bringing up PG
     if (exists $host_cfg->{'pg-recovery'}) {
         if (my $recovery = locate_recovery_conf($failover, $host_cfg)) {
-            if ($recovery->{'remote'}) {
-                $cmd = Failover::Command->new('cp',$recovery->{'path'},sprintf('%s/recovery.conf', $host_cfg->{'pg-data'}))
-                    ->name(sprintf('Transferring recovery.conf to host %s', $host))
+
+            if ($host_cfg->{'host'} && $recovery->{'remote'} && $host_cfg->{'host'} ne $recovery->{'host'}) {
+                # both the source of the recovery.conf and the target machine are remote hosts, and they are different
+                # scp from one to the other
+
+                $cmd = Failover::Command->new('scp',
+                        sprintf('%s@%s:%s', $recovery->{'user'}, $recovery->{'host'}, $recovery->{'path'}),
+                        sprintf('%s@%s:%s/recovery.conf', $host_cfg->{'user'},$host_cfg->{'host'},$host_cfg->{'pg-data'}))
+                    ->name(sprintf('Transferring recovery.conf from host %s to host %s', $recovery->{'host'}, $host))
+                    ->verbose($failover->verbose)
+                    ->run($failover->dry_run);
+            } elsif ($host_cfg->{'host'} && $recovery->{'remote'}) {
+                # both are the same remote host
+                # perform a local copy on the remote host via ssh
+
+                $cmd = Failover::Command->new('cp',
+                        $recovery->{'path'},
+                        sprintf('%s/recovery.conf', $host_cfg->{'pg-data'}))
+                    ->name(sprintf('Copying recovery.conf on host %s', $recovery->{'host'}))
                     ->verbose($failover->verbose)
                     ->host($host_cfg->{'host'})
                     ->port($host_cfg->{'port'})
                     ->user($host_cfg->{'user'})
                     ->ssh->run($failover->dry_run);
-            } else {
-                $cmd = Failover::Command->new('scp',$recovery->{'path'},
-                        sprintf('%s@%s:%s/recovery.conf', $host_cfg->{'user'}, $host_cfg->{'host'}, $host_cfg->{'pg-data'}))
+            } elsif ($host_cfg->{'host'}) {
+                # only the target machine is a remote host
+                # scp from our current host to the target
+
+                $cmd = Failover::Command->new('scp',
+                        $recovery->{'path'},
+                        sprintf('%s@%s:%s/recovery.conf', $host_cfg->{'user'},$host_cfg->{'host'},$host_cfg->{'pg-data'}))
                     ->name(sprintf('Transferring recovery.conf to host %s', $host))
+                    ->verbose($failover->verbose)
+                    ->run($failover->dry_run);
+            } elsif ($recovery->{'remote'}) {
+                # only the recovery.conf source is remote
+                # scp from that machine to the current host
+
+                $cmd = Failover::Command->new('scp',
+                        sprintf('%s@%s:%s', $recovery->{'user'}, $recovery->{'host'}, $recovery->{'path'}),
+                        sprintf('%s/recovery.conf', $host_cfg->{'pg-data'}))
+                    ->name(sprintf('Transferring recovery.conf from host %s', $recovery->{'host'}))
+                    ->verbose($failover->verbose)
+                    ->run($failover->dry_run);
+            } else {
+                # both source and target are the current machine
+                # just do a local copy
+
+                $cmd = Failover::Command->new('cp',
+                        $recovery->{'path'},
+                        sprintf('%s/recovery.conf', $host_cfg->{'pg-data'}))
+                    ->name(sprintf('Copying recovery.conf'))
                     ->verbose($failover->verbose)
                     ->run($failover->dry_run);
             }
