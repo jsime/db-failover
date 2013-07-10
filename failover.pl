@@ -1514,7 +1514,7 @@ replay WAL segments.
 sub latest_base_backup {
     my ($failover) = @_;
 
-    my %latest = ( ts => '0000-00-00-000000' );
+    my %latest = ( ts => '0000-00-00' );
 
     # Fake a base backup entry for dry-runs
     if ($failover->dry_run) {
@@ -1536,7 +1536,7 @@ sub latest_base_backup {
 
         foreach my $l (split(/\n/, $cmd->stdout)) {
             $l =~ s{(^\s+|\s+$)}{}ogs;
-            next if $l !~ m|-data-(\d{4}-\d\d-\d\d-\d{6})\.tar\.gz|;
+            next if $l !~ m|-data-(\d{4}-\d\d-\d\d)\.tar\.gz|;
 
             if (!exists $latest{'file'} || $1 gt $latest{'ts'}) {
                 %latest = ( 'host' => $host,
