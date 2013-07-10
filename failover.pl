@@ -1307,8 +1307,9 @@ sub demotion {
             ->host($host_cfg->{'host'})
             ->port($host_cfg->{'port'})
             ->user($host_cfg->{'user'})
-            ->sudo(1)
-            ->ssh->run($failover->dry_run);
+            ->sudo(1);
+        $cmd->ssh if $host_cfg->{'host'};
+        $cmd->run($failover->dry_run);
 
         if ($cmd->status != 0) {
             Failover::Utils::print_error("An error was encountered starting PostgreSQL on %s.\n%s",
