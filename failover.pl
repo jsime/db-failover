@@ -1192,16 +1192,25 @@ sub demotion {
     my %backup = latest_base_backup($failover);
     my $backup_cfg = $failover->config->section($backup{'host'});
 
-    $cmd = Failover::Command->new('rsync', '-q',
-            sprintf('%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'user'}, $backup{'file'}),
-            sprintf('%s/base_restore.tar.gz', $host_cfg->{'omnipitr'})
-        )
-        ->name(sprintf('Copying latest base backup from host %s.', $backup{'host'}))
-        ->host($host_cfg->{'host'})
-        ->port($host_cfg->{'port'})
-        ->user($host_cfg->{'user'})
-        ->ssh->run($failover->dry_run);
-    exit(1) if $failover->exit_on_error && $cmd->status != 0;
+    if ($backup_cfg->{'host'}) {
+        $cmd = Failover::Command->new('rsync', '-q',
+                sprintf('%s@%s:%s', $backup_cfg->{'user'}, $backup_cfg->{'user'}, $backup{'file'}),
+                sprintf('%s/base_restore.tar.gz', $host_cfg->{'omnipitr'})
+            )
+            ->name(sprintf('Copying latest base backup from host %s.', $backup{'host'}))
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+        exit(1) if $failover->exit_on_error && $cmd->status != 0;
+    } else {
+        $cmd = Failover::Command->new('cp',
+                $backup{'file'},
+                sprintf('%s/base_restore.tar.gz', $host_cfg->{'omnipitr'}))
+            ->name(sprintf('Copying latest base backup from host %s.', $backup{'host'}))
+            ->run($failover->dry_run);
+        exit(1) if $failover->exit_on_error && $cmd->status != 0;
+    }
 
     $cmd = Failover::Command->new(qw( tar -x -z -C ), $host_cfg->{'pg-data'},
             '-f', sprintf('%s/base_restore.tar.gz', $host_cfg->{'omnipitr'})
@@ -1529,8 +1538,13 @@ sub latest_base_backup {
             ->silent(1)
             ->host($host_cfg->{'host'})
             ->port($host_cfg->{'port'})
-            ->user($host_cfg->{'user'})
-            ->ssh->run($failover->dry_run);
+            ->user($host_cfg->{'user'});
+
+        if ($host_cfg->{'host'}) {
+            $cmd->ssh->run($failover->dry_run);
+        } else {
+            $cmd->run($failover->dry_run);
+        }
 
         next if $cmd->status != 0;
 
