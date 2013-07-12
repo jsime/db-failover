@@ -1592,7 +1592,7 @@ sub latest_base_backup {
 
         foreach my $l (split(/\n/, $cmd->stdout)) {
             $l =~ s{(^\s+|\s+$)}{}ogs;
-            next if $l !~ m|-data-(\d{4}-\d\d-\d\d)\.tar\.gz|;
+            next if $l !~ /-data-(\d{4}-\d\d-\d\d)(\D|$)/;
 
             if (!exists $latest{'file'} || $1 gt $latest{'ts'}) {
                 %latest = ( 'host' => $host,
