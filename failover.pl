@@ -521,15 +521,9 @@ EOU
 
 Performs the requested actions. Short-circuits if running in test mode, otherwise it displays a
 summary of the current configuration, prompts to continue, and then proceeds to run promotions, then
-IP takeovers, then demotions, then backups. This order is done to minimize possible downtime.
-
-The new master should already be promoted before it assumes the shared IP. Running the demotion(s)
-after that also allows for the user to terminate the program should they encounter an error or
-self-doubt. Prior to the demotion(s) running, they will still have their original master to fall
-back on to (assuming the failover is being done as a planned event, that is).
-
-Backup is performed last because, depending on the size of the database(s) being backed up, this
-operation may take a significant amount of time.
+IP takeovers, then backups, then demotions. This order is done because a promotion leads to a new
+timeline, which invalidates the existing base backup (thereby making it impossible to demote a
+system from that backup).
 
 =cut
 
@@ -556,13 +550,13 @@ sub run {
     my $new_ip_host = (Failover::Utils::sort_section_names($self->promote))[-1];
     Failover::Action->ip_takeover($self, $new_ip_host) if defined $new_ip_host;
 
-    # Run through hosts to be demoted
-    Failover::Action->demotion($self, $_) for Failover::Utils::sort_section_names($self->demote);
-
     # Hosts on which we should (or may) perform omnipitr-backup-master
     if ($self->backup && $self->backup > 0) {
         Failover::Action->backup($self, $_) for Failover::Utils::sort_section_names($self->backup);
     }
+
+    # Run through hosts to be demoted
+    Failover::Action->demotion($self, $_) for Failover::Utils::sort_section_names($self->demote);
 }
 
 =head3 show_config
