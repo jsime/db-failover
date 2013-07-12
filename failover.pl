@@ -1227,6 +1227,10 @@ sub demotion {
     # prompt user to put the file into place before we proceed with bringing up PG
     if (exists $host_cfg->{'pg-recovery'}) {
         if (my $recovery = locate_recovery_conf($failover, $host_cfg)) {
+            Failover::Utils::log('Recovery "%s" from host %s to %s host %s',
+                $host_cfg->{'pg-recovery'}, $host_cfg->{'host'} || '::1',
+                $recovery->{'remote'} ? 'remote' : 'local',
+                $recovery->{'host'} || '::1') if $failover->verbose;
 
             if ($host_cfg->{'host'} && $recovery->{'remote'} && $host_cfg->{'host'} ne $recovery->{'host'}) {
                 # both the source of the recovery.conf and the target machine are remote hosts, and they are different
@@ -1637,7 +1641,7 @@ sub locate_recovery_conf {
         ->user($host_cfg->{'user'})
         ->ssh->run($failover->dry_run);
 
-    return { remote => 1, path => $host_cfg->{'pg-recovery'} } if $cmd->status == 0;
+    return { remote => 1, path => $host_cfg->{'pg-recovery'}, %{$host_cfg} } if $cmd->status == 0;
 
     return;
 }
