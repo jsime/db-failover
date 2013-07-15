@@ -170,7 +170,7 @@ the character class [a-z0-9_-]. The names must be unique.
 
 =item * [backup-XYZ]
 
-Valid settings: C<host>, C<user>, C<path>, C<tempdir>, C<dstbackup>
+Valid settings: C<host>, C<user>, C<path>, C<tempdir>, C<dstbackup>, C<compression>
 
 Defines a host which is used as a backup target. Settings used to run omnipitr-master-backup
 to produce full-backups using rsync-over-ssh, as well as configure a -dr target for
@@ -211,6 +211,11 @@ The following is a list of every setting name possible, across all configuration
 and what the setting is used for.
 
 =over 4
+
+=item * compression
+
+Specifies the compression method to use for backups. Accepts any value understood by
+OmniPITR (as of this writing, that list is: gzip, bzip2, lzma).
 
 =item * database
 
@@ -362,6 +367,7 @@ space only in the common section.
     user = backups
     host = backup.internal.company.com
     path = /backups/database/foobar
+    compression = gzip
 
     [data-check-interval]
     query = select now() > now() - interval '1 hour'
@@ -1069,13 +1075,18 @@ sub backup {
 
         if (exists $backup_cfg->{'host'} && $backup_cfg->{'host'} =~ m{\w}o) {
             push(@cmd_remotes,
-                '-dr', sprintf('gzip=%s:%s', $backup_cfg->{'host'}, $backup_cfg->{'path'}),
+                '-dr', sprintf('%s%s:%s',
+                               exists $backup_cfg->{'compression'} ? $backup_cfg->{'compression'} . '=' : '',
+                               $backup_cfg->{'host'},
+                               $backup_cfg->{'path'}),
                 '-t',  $backup_cfg->{'tempdir'},
                 '-x',  $backup_cfg->{'dstbackup'},
             );
         } else {
             push(@cmd_remotes,
-                '-dl', $backup_cfg->{'path'},
+                '-dl', sprintf('%s%s',
+                               exists $backup_cfg->{'compression'} ? $backup_cfg->{'compression'} . '=' : '',
+                               $backup_cfg->{'path'}),
                 '-t',  $backup_cfg->{'tempdir'},
                 '-x',  $backup_cfg->{'dstbackup'},
             );
@@ -2325,7 +2336,7 @@ sub normalize_backup {
     my ($self) = @_;
 
     Failover::Utils::die_error('No backup server defined.') unless exists $self->{'config'}{'backup'};
-    $self->normalize_section('backup', qw( host user path tempdir dstbackup ));
+    $self->normalize_section('backup', qw( compression host user path tempdir dstbackup ));
 
     $self->{'config'}{'backup'}{'tempdir'} = '/tmp' unless exists $self->{'config'}{'backup'}{'tempdir'};
     $self->{'config'}{'backup'}{'dstbackup'} = $self->{'config'}{'backup'}{'tempdir'} . '/dstbackup'
@@ -2453,7 +2464,7 @@ sub validate_setting_name {
     $name =~ s{(^\s+|\s+$)}{}ogs;
 
     return $name if grep { $_ eq $name }
-        qw( host port database user interface method trigger-file query result
+        qw( compression host port database user interface method trigger-file query result
             pg-data pg-conf pg-port pg-user pg-restart pg-reload pg-start pg-stop pg-recovery
             omnipitr path timeout tempdir dstbackup );
     return;
