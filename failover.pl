@@ -1588,24 +1588,54 @@ used when demoting a PostgreSQL host.
 sub locate_recovery_conf {
     my ($failover, $host_cfg) = @_;
 
-    my $path = $host_cfg->{'pg-recovery'};
-    return { remote => 0, path => $path } if -f $path && -r _;
+    my $path;
 
-    $path = $failover->{'base_dir'} . '/' . $host_cfg->{'pg-recovery'};
-    return { remote => 0, path => $path } if -f $path && -r _;
+    # Compare host in host_cfg to local name and aliases to see if we should look first
+    # for the file in a remote path.
+    my ($l_host, $l_aliases) = gethostbyaddr(pack('C4',split('\.','127.0.0.1')),2);
+    $l_aliases = [split(m{\s+}o, $l_aliases)];
 
-    $path = $failover->{'base_dir'} . '/recovery.conf';
-    return { remote => 0, path => $path } if -f $path && -r _;
+    if ((grep { $host_cfg->{'host'} eq $_ } ($l_host, @{$l_aliases})) > 0) {
+        $path = $host_cfg->{'pg-recovery'};
+        return { remote => 0, path => $path } if -f $path && -r _;
 
-    my $cmd = Failover::Command->new('ls',$host_cfg->{'pg-recovery'})
-        ->name(sprintf('Locating PostgreSQL recovery.conf for %s', $host_cfg->{'host'}))
-        ->verbose($failover->verbose)
-        ->host($host_cfg->{'host'})
-        ->port($host_cfg->{'port'})
-        ->user($host_cfg->{'user'})
-        ->ssh->run($failover->dry_run);
+        $path = $failover->{'base_dir'} . '/' . $host_cfg->{'pg-recovery'};
+        return { remote => 0, path => $path } if -f $path && -r _;
 
-    return { remote => 1, path => $host_cfg->{'pg-recovery'}, %{$host_cfg} } if $cmd->status == 0;
+        $path = $failover->{'base_dir'} . '/recovery.conf';
+        return { remote => 0, path => $path } if -f $path && -r _;
+    } else {
+        $path = $host_cfg->{'pg-recovery'};
+        my $cmd = Failover::Command->new('ls',$path)
+            ->name(sprintf('Locating PostgreSQL recovery.conf for %s', $host_cfg->{'host'}))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+        return { remote => 1, path => $path, %{$host_cfg} } if $cmd->status == 0;
+
+        $path = $failover->{'base_dir'} . '/' . $host_cfg->{'pg-recovery'};
+        $cmd = Failover::Command->new('ls',$path)
+            ->name(sprintf('Locating PostgreSQL recovery.conf for %s', $host_cfg->{'host'}))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+        return { remote => 1, path => $path, %{$host_cfg} } if $cmd->status == 0;
+
+        $path = $failover->{'base_dir'} . '/recovery.conf';
+        $cmd = Failover::Command->new('ls',$path)
+            ->name(sprintf('Locating PostgreSQL recovery.conf for %s', $host_cfg->{'host'}))
+            ->verbose($failover->verbose)
+            ->host($host_cfg->{'host'})
+            ->port($host_cfg->{'port'})
+            ->user($host_cfg->{'user'})
+            ->ssh->run($failover->dry_run);
+        return { remote => 1, path => $path, %{$host_cfg} } if $cmd->status == 0;
+
+    }
 
     return;
 }
@@ -2094,6 +2124,49 @@ sub print_running {
         color('yellow'),
         (length($name) > $width ? substr($name, 0, ($width - 3)) . '...' : $name),
         color('reset')) unless $self->{'silent'};
+}
+
+
+package Failover::Host;
+
+use strict;
+use warnings;
+
+# Get the local machine's hostname and aliases to compare against later
+my ($l_host, $l_aliases) = gethostbyaddr(pack('C4',split('\.','127.0.0.1')),2);
+$l_aliases = [split(m{\s+}o, $l_aliases)];
+
+=head2 Package: Failover::Host
+
+Host machine abstraction class.
+
+=cut
+
+sub new {
+    my ($class, $cfg) = @_;
+
+    my $self = bless {}, $class;
+
+    $self->{'config'} = $cfg if $cfg && ref($cfg) eq 'HASH';
+
+    # Compare hostname to local machine's names to figure out if we're dealing with a remote host
+    $self->{'remote'} = (grep { lc($self->{'config'}{'host'}) eq $_ } ($l_host, @{$l_aliases})) ? 0 : 1;
+
+    return $self;
+}
+
+sub config {
+    my ($self) = @_;
+
+    return $self->{'config'} if exists $self->{'config'} && ref($self->{'config'}) eq 'HASH';
+    return {};
+}
+
+sub remote {
+    my ($self) = @_;
+
+    return 1 if exists $self->{'remote'} && $self->{'remote'};
+    return 0;
 }
 
 
